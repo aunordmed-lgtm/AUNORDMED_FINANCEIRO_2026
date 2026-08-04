@@ -43,7 +43,7 @@ export function Notas({ notas, medicos, onRefresh }) {
   const [sortKey, setSortKey] = useState('criado_em')
   const [sortDir, setSortDir] = useState('desc')
   const [medSel, setMedSel] = useState([])
-  const [form, setForm] = useState({ nf: '', tomador: '', comp: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
+  const [form, setForm] = useState({ nf: '', tomador: '', comp: '', mes_recebimento: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
   // Importação Excel médicos
   const [importPreview, setImportPreview] = useState([])
   const [importErro, setImportErro] = useState('')
@@ -148,7 +148,7 @@ export function Notas({ notas, medicos, onRefresh }) {
 
   const abrirNova = () => {
     setEditando(null)
-    setForm({ nf: '', tomador: '', comp: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
+    setForm({ nf: '', tomador: '', comp: '', mes_recebimento: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
     setMedSel([])
     setAbaModal('dados')
     setImportPreview([])
@@ -158,7 +158,7 @@ export function Notas({ notas, medicos, onRefresh }) {
 
   const abrirEditar = (nota) => {
     setEditando(nota)
-    setForm({ nf: nota.nf || '', tomador: nota.tomador || '', comp: nota.comp || '', emissao: nota.emissao?.split('T')[0] || '', status: nota.status || 'Emitida', obs: nota.obs || '', bruto: nota.bruto || '' })
+    setForm({ nf: nota.nf || '', tomador: nota.tomador || '', comp: nota.comp || '', mes_recebimento: nota.mes_recebimento || '', emissao: nota.emissao?.split('T')[0] || '', status: nota.status || 'Emitida', obs: nota.obs || '', bruto: nota.bruto || '' })
     setMedSel(nota.medicos_nota?.map(mn => ({ nome: mn.nome, crm: mn.crm || '', ret: mn.retencao_individual || 13, valor: mn.valor_bruto_medico || '' })) || [])
     setAbaModal('dados')
     setImportPreview([])
@@ -285,6 +285,7 @@ export function Notas({ notas, medicos, onRefresh }) {
       ...form, bruto: calc.bruto, recebido: calc.recebido, total_repasse: calc.totalRepasse,
       margem: calc.margem, pct_margem: calc.pct_margem,
       ir: calc.ir, csll: calc.csll, pis: calc.pis, cofins: calc.cofins,
+      mes_recebimento: form.mes_recebimento || null,
       medicos_nota: medicos_nota.length ? medicos_nota : null, nomes_medicos: medSel.map(m => m.nome).join(', ') || null
     }
     setLoading(true)
@@ -299,10 +300,14 @@ export function Notas({ notas, medicos, onRefresh }) {
         for (const ms of medSel) {
           const med = medicos.find(m => m.nome === ms.nome)
           const repMed = parseFloat(ms.valor || 0) * (1 - parseFloat(ms.ret || 13) / 100)
-          await supabase.from('comprovantes').insert({ token: uid(), nf_id: nova?.id, medico_nome: ms.nome, medico_crm: med?.crm || null, tomador: form.tomador, valor_repasse: repMed, competencia: form.comp || null, dados_extras: { nf: form.nf, pix: med?.chave_pix } }).catch(() => {})
+          try {
+            await supabase.from('comprovantes').insert({ token: uid(), nf_id: nova?.id, medico_nome: ms.nome, medico_crm: med?.crm || null, tomador: form.tomador, valor_repasse: repMed, competencia: form.comp || null, dados_extras: { nf: form.nf, pix: med?.chave_pix } })
+          } catch (e) {}
         }
         if (prefillIds.length) {
-          await supabase.from('solicitacoes_medicos').update({ status: 'Nota emitida', nota_fiscal_id: nova?.id }).in('id', prefillIds).catch(() => {})
+          try {
+            await supabase.from('solicitacoes_medicos').update({ status: 'Nota emitida', nota_fiscal_id: nova?.id }).in('id', prefillIds)
+          } catch (e) {}
           setPrefillIds([])
         }
         toast('Nota adicionada!')
@@ -428,6 +433,7 @@ export function Notas({ notas, medicos, onRefresh }) {
                 <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('tomador')}>Tomador{sortArrow('tomador')}</th>
                 <th>Médicos</th>
                 <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('comp')}>Competência{sortArrow('comp')}</th>
+                <th>Receb.</th>
                 <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('bruto')}>Bruto{sortArrow('bruto')}</th>
                 <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('recebido')}>Recebido{sortArrow('recebido')}</th>
                 <th style={{ cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('total_repasse')}>Repasse{sortArrow('total_repasse')}</th>
@@ -437,7 +443,7 @@ export function Notas({ notas, medicos, onRefresh }) {
               </tr></thead>
               <tbody>
                 {filtradas.length === 0 ? (
-                  <tr><td colSpan={11}><div className="empty-state"><div className="empty-icon">📄</div><h4>Nenhuma nota</h4><p>Clique em "+ Nova nota" para registrar</p></div></td></tr>
+                  <tr><td colSpan={12}><div className="empty-state"><div className="empty-icon">📄</div><h4>Nenhuma nota</h4><p>Clique em "+ Nova nota" para registrar</p></div></td></tr>
                 ) : filtradas.map((n, i) => (
                   <tr key={n.id}>
                     <td className="mono" style={{ color:'var(--n6)' }}>{i+1}</td>
@@ -471,6 +477,13 @@ export function Notas({ notas, medicos, onRefresh }) {
                       })()}
                     </td>
                     <td className="mono">{fmtMes(n.comp)}</td>
+                    <td className="mono">
+                      {n.mes_recebimento
+                        ? <span style={{ color: n.mes_recebimento !== n.comp ? 'var(--orange, #D97706)' : 'inherit', fontWeight: n.mes_recebimento !== n.comp ? 700 : 400 }} title={n.mes_recebimento !== n.comp ? 'Recebido em mês diferente da competência de emissão' : ''}>
+                            {fmtMes(n.mes_recebimento)}
+                          </span>
+                        : <span style={{ color: 'var(--n6)' }}>—</span>}
+                    </td>
                     <td className="mono" style={{ fontWeight:600 }}>{brl(n.bruto)}</td>
                     <td className="mono" style={{ color:'var(--blue)' }}>{brl(n.recebido)}</td>
                     <td className="mono" style={{ color:'var(--n4)' }}>{brl(n.total_repasse||0)}</td>
@@ -616,7 +629,7 @@ export function Notas({ notas, medicos, onRefresh }) {
         {abaModal === 'dados' && (
           <>
             <div className="form-grid">
-              {[['nf','Nº da NF *','text','00001'],['tomador','Tomador *','text','Unimed…'],['comp','Competência','month',''],['emissao','Data emissão','date',''],['obs','Observações','text','']].map(([k,l,t,p]) => (
+              {[['nf','Nº da NF *','text','00001'],['tomador','Tomador *','text','Unimed…'],['comp','Competência (emissão)','month',''],['mes_recebimento','Mês de recebimento','month',''],['emissao','Data emissão','date',''],['obs','Observações','text','']].map(([k,l,t,p]) => (
                 <div key={k} className="field">
                   <label>{l}</label>
                   <input type={t} value={form[k]} onChange={e => setForm(f=>({...f,[k]:e.target.value}))} placeholder={p}/>
