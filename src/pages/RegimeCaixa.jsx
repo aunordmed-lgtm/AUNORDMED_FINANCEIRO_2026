@@ -460,8 +460,7 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
   const [fMedico, setFMedico] = useState('')
   const [fComp, setFComp] = useState('')
   const [fTomador, setFTomador] = useState('')
-  const [fDataIni, setFDataIni] = useState('')
-  const [fDataFim, setFDataFim] = useState('')
+  const [fStatus, setFStatus] = useState('')
 
   const medicosOpts = useMemo(() => {
     const s = new Set(medicos.map(m => m.nome).filter(Boolean))
@@ -485,6 +484,7 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
     notas.forEach(n => {
       if (fTomador && n.tomador !== fTomador) return
       if (fComp && n.comp !== fComp) return
+      if (fStatus && n.status !== fStatus) return
       ;(n.medicos_nota || []).forEach(mn => {
         if (fMedico && mn.nome !== fMedico) return
         out.push({
@@ -494,42 +494,29 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
       })
     })
     return out
-  }, [notas, fMedico, fComp, fTomador])
-
-  const comprovantesFiltrados = useMemo(() => {
-    return comprovantes.filter(c => {
-      if (fMedico && c.medico_nome !== fMedico) return false
-      if (fTomador && c.tomador !== fTomador) return false
-      if (fComp && c.competencia !== fComp) return false
-      if (fDataIni && (!c.data_pagamento || c.data_pagamento < fDataIni)) return false
-      if (fDataFim && (!c.data_pagamento || c.data_pagamento > fDataFim)) return false
-      return true
-    })
-  }, [comprovantes, fMedico, fComp, fTomador, fDataIni, fDataFim])
+  }, [notas, fMedico, fComp, fTomador, fStatus])
 
   const totalBruto = linhas.reduce((a, l) => a + l.bruto, 0)
   const totalDevido = linhas.reduce((a, l) => a + l.repasse, 0)
-  const totalPago = comprovantesFiltrados.reduce((a, c) => a + (c.valor_repasse || 0), 0)
+  const totalPago = linhas.filter(l => l.status === 'Paga ao médico').reduce((a, l) => a + l.repasse, 0)
   const diferenca = totalPago - totalDevido
 
   const porMedico = useMemo(() => {
     const m = {}
     linhas.forEach(l => {
-      if (!m[l.medico]) m[l.medico] = { medico: l.medico, qtdNotas: 0, bruto: 0, devido: 0, pago: 0 }
+      if (!m[l.medico]) m[l.medico] = { medico: l.medico, qtdNotas: 0, qtdPagas: 0, bruto: 0, devido: 0, pago: 0 }
       m[l.medico].qtdNotas++
       m[l.medico].bruto += l.bruto
       m[l.medico].devido += l.repasse
-    })
-    comprovantesFiltrados.forEach(c => {
-      const nome = c.medico_nome
-      if (!nome) return
-      if (!m[nome]) m[nome] = { medico: nome, qtdNotas: 0, bruto: 0, devido: 0, pago: 0 }
-      m[nome].pago += c.valor_repasse || 0
+      if (l.status === 'Paga ao médico') {
+        m[l.medico].qtdPagas++
+        m[l.medico].pago += l.repasse
+      }
     })
     return Object.values(m).sort((a, b) => a.medico.localeCompare(b.medico))
-  }, [linhas, comprovantesFiltrados])
+  }, [linhas])
 
-  function limparFiltros() { setFMedico(''); setFComp(''); setFTomador(''); setFDataIni(''); setFDataFim('') }
+  function limparFiltros() { setFMedico(''); setFComp(''); setFTomador(''); setFStatus('') }
 
   function exportarCSV() {
     const headers = ['NF', 'Tomador', 'Competência', 'Médico', 'Bruto', 'Repasse (devido)', 'Status']
@@ -592,12 +579,13 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
                 </select>
               </div>
               <div>
-                <label style={labelStyle}>Pago de</label>
-                <input type="date" style={inputStyle} value={fDataIni} onChange={e => setFDataIni(e.target.value)} />
-              </div>
-              <div>
-                <label style={labelStyle}>Pago até</label>
-                <input type="date" style={inputStyle} value={fDataFim} onChange={e => setFDataFim(e.target.value)} />
+                <label style={labelStyle}>Status da nota</label>
+                <select style={inputStyle} value={fStatus} onChange={e => setFStatus(e.target.value)}>
+                  <option value="">Todos</option>
+                  <option value="Emitida">Emitida</option>
+                  <option value="Recebida">Recebida</option>
+                  <option value="Paga ao médico">Paga ao médico</option>
+                </select>
               </div>
               <div style={{ flex: 1 }} />
               <button onClick={limparFiltros} style={btnGhost}>Limpar filtros</button>
@@ -607,7 +595,7 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
               <Kpi label="Total bruto" value={`R$ ${brl(totalBruto)}`} sub="valor emitido nas notas" />
               <Kpi label="Total devido (repasse)" value={`R$ ${brl(totalDevido)}`} sub="segundo as notas fiscais" />
-              <Kpi label="Total pago (caixa)" value={`R$ ${brl(totalPago)}`} sub="segundo os comprovantes" color={G.g2} />
+              <Kpi label="Total pago (caixa)" value={`R$ ${brl(totalPago)}`} sub="notas marcadas 'Paga ao médico'" color={G.g2} />
               <Kpi label="Diferença" value={`${diferenca >= 0 ? '' : '-'}R$ ${brl(Math.abs(diferenca))}`} sub="pago − devido" color={Math.abs(diferenca) < 0.01 ? GRAY[3] : diferenca > 0 ? G.g2 : RED} />
             </div>
 
@@ -620,6 +608,7 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
                   <thead><tr style={{ background: G.g1 }}>
                     <th style={thStyle}>Médico</th>
                     <th style={{ ...thStyle, textAlign: 'center' }}>Nº notas</th>
+                    <th style={{ ...thStyle, textAlign: 'center' }}>Nº pagas</th>
                     <th style={{ ...thStyle, textAlign: 'right' }}>Bruto</th>
                     <th style={{ ...thStyle, textAlign: 'right' }}>Devido (repasse)</th>
                     <th style={{ ...thStyle, textAlign: 'right' }}>Pago (caixa)</th>
@@ -627,7 +616,7 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
                   </tr></thead>
                   <tbody>
                     {porMedico.length === 0 && (
-                      <tr><td colSpan={6} style={{ ...tdStyle, textAlign: 'center', color: GRAY[3], padding: 30 }}>Nenhum resultado para os filtros selecionados.</td></tr>
+                      <tr><td colSpan={7} style={{ ...tdStyle, textAlign: 'center', color: GRAY[3], padding: 30 }}>Nenhum resultado para os filtros selecionados.</td></tr>
                     )}
                     {porMedico.map(m => {
                       const dif = m.pago - m.devido
@@ -635,6 +624,7 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
                         <tr key={m.medico}>
                           <td style={{ ...tdStyle, fontWeight: 600, whiteSpace: 'normal', color: GRAY[1] }}>{m.medico}</td>
                           <td style={{ ...tdStyle, textAlign: 'center', fontFamily: 'monospace' }}>{m.qtdNotas}</td>
+                          <td style={{ ...tdStyle, textAlign: 'center', fontFamily: 'monospace', color: m.qtdPagas === m.qtdNotas ? G.g2 : ORANGE, fontWeight: 700 }}>{m.qtdPagas}</td>
                           <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace' }}>R$ {brl(m.bruto)}</td>
                           <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace' }}>R$ {brl(m.devido)}</td>
                           <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace' }}>R$ {brl(m.pago)}</td>
