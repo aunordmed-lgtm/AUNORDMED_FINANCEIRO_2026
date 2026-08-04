@@ -1,53 +1,21 @@
-import { useMemo, useState, useRef } from 'react'
+import { useState, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useToast } from '../components/Toast'
+import { brl, fmtData } from '../lib/helpers'
 
-const brl = v => Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-const fmtMes = m => {
-  if (!m) return '—'
-  const [y, mo] = m.split('-')
-  const ms = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
-  return `${ms[+mo - 1]}/${y}`
-}
-const fmtDt = d => {
-  if (!d) return '—'
-  const p = d.split('T')[0].split('-')
-  return `${p[2]}/${p[1]}/${p[0]}`
-}
-
-const G = { g1: '#0D3D20', g2: '#145C30', g3: '#1A7A3E', g4: '#22994D', g6: '#A8DCBA', g7: '#E8F5ED' }
-const GRAY = { 0: '#0F172A', 1: '#1E293B', 2: '#475569', 3: '#94A3B8', 5: '#E2E8F0', 6: '#F1F5F9' }
-const RED = '#DC2626'
-const ORANGE = '#D97706'
-
-const cardStyle = { background: '#fff', border: '1px solid #D4E6DA', borderRadius: 14, boxShadow: '0 1px 3px rgba(0,0,0,.06)' }
-const inputStyle = { border: '1.5px solid ' + GRAY[5], borderRadius: 10, padding: '0 12px', fontSize: 13, color: GRAY[0], background: GRAY[6], height: 38, minWidth: 160 }
-const labelStyle = { fontSize: 10, fontWeight: 700, color: GRAY[2], textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 5, display: 'block' }
-const thStyle = { padding: '10px 14px', textAlign: 'left', fontSize: 9, fontWeight: 700, color: G.g6, textTransform: 'uppercase', letterSpacing: '.5px', whiteSpace: 'nowrap' }
-const tdStyle = { padding: '10px 14px', borderBottom: '1px solid ' + GRAY[6], fontSize: 12.5, whiteSpace: 'nowrap' }
-const btnPrimary = { height: 38, padding: '0 16px', borderRadius: 10, border: 'none', background: G.g3, color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer' }
-const btnGhost = { height: 38, padding: '0 16px', borderRadius: 10, border: '1px solid #D4E6DA', background: GRAY[6], color: GRAY[1], fontSize: 13, fontWeight: 600, cursor: 'pointer' }
-const badge = (bg, color, border) => ({ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 10px', borderRadius: 99, fontSize: 10.5, fontWeight: 700, background: bg, color, border: '1px solid ' + border })
-
-function Kpi({ label, value, sub, color }) {
-  return (
-    <div style={{ ...cardStyle, padding: '16px 18px' }}>
-      <div style={labelStyle}>{label}</div>
-      <div style={{ fontSize: 21, fontWeight: 700, fontFamily: 'monospace', color: color || GRAY[0] }}>{value}</div>
-      {sub && <div style={{ fontSize: 11, color: GRAY[3], marginTop: 4 }}>{sub}</div>}
-    </div>
-  )
-}
-
-// ── Parser OFX (mesmo formato usado no ExtratoOFX.jsx, Banco Inter / SGML Latin-1) ──
+// Parser OFX formato Banco Inter (SGML Latin-1)
 function parseOFX(text) {
   const transacoes = []
+
+  // Extrair blocos STMTTRN
   const blocos = text.match(/<STMTTRN>([\s\S]*?)<\/STMTTRN>/gi) || []
+
   blocos.forEach((bloco, i) => {
     const get = (tag) => {
       const match = bloco.match(new RegExp(`<${tag}>([^<\r\n]+)`, 'i'))
       return match ? match[1].trim() : ''
     }
+
     const tipo = get('TRNTYPE').toUpperCase()
     const valorStr = get('TRNAMT').replace(',', '.')
     const valor = parseFloat(valorStr) || 0
@@ -55,637 +23,233 @@ function parseOFX(text) {
     const memo = get('MEMO') || get('NAME') || ''
     const nome = get('NAME') || ''
     const fitid = get('FITID') || `T${i}`
+
+    // Converter data YYYYMMDD → YYYY-MM-DD
     let data = ''
-    if (dtRaw.length >= 8) data = `${dtRaw.substring(0, 4)}-${dtRaw.substring(4, 6)}-${dtRaw.substring(6, 8)}`
+    if (dtRaw.length >= 8) {
+      data = `${dtRaw.substring(0,4)}-${dtRaw.substring(4,6)}-${dtRaw.substring(6,8)}`
+    }
+
     if (valor !== 0) {
       transacoes.push({
-        id: fitid, valor, data,
+        id: fitid,
+        valor,
+        data,
         memo: memo.replace(/["]/g, '').trim(),
         nome: nome.trim(),
         tipo: valor > 0 ? 'credito' : 'debito',
-        trntype: tipo,
+        trntype: tipo
       })
     }
   })
+
   return transacoes
 }
 
-function normalizar(s) {
-  return (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
-}
-
-// Cruza débitos do extrato com os médicos de cada nota fiscal ainda não marcada como "Paga ao médico"
-function cruzarDebitosComNotas(transacoes, notas) {
+function cruzar(transacoes, notas) {
   const MARGEM = 0.02
-  const debitos = transacoes.filter(t => t.tipo === 'debito')
-  const usados = new Set() // índices de transações já usadas em algum match
+  const resultado = []
 
-  const notasRelevantes = notas.filter(n => n.status !== 'Paga ao médico' && (n.medicos_nota || []).length)
+  transacoes.filter(t => t.tipo === 'credito').forEach(t => {
+    const valorT = Math.abs(t.valor)
 
-  const resultado = notasRelevantes.map(nota => {
-    const medicosStatus = (nota.medicos_nota || []).map(mn => {
-      const valorAlvo = mn.repasse || 0
-      const nomeAlvoNorm = normalizar(mn.nome).split(' ')[0]
-
-      const candidatos = debitos
-        .map((t, idx) => ({ t, idx }))
-        .filter(({ t, idx }) => !usados.has(idx) && Math.abs(Math.abs(t.valor) - valorAlvo) <= Math.max(MARGEM, valorAlvo * 0.005))
-
-      let melhor = null
-      if (candidatos.length === 1) melhor = candidatos[0]
-      else if (candidatos.length > 1) {
-        melhor = candidatos.find(({ t }) => normalizar(t.nome || t.memo).includes(nomeAlvoNorm)) || candidatos[0]
-      }
-
-      if (melhor) usados.add(melhor.idx)
-
-      return {
-        nome: mn.nome,
-        valor: valorAlvo,
-        transacao: melhor?.t || null,
-        pago: !!melhor,
-      }
+    const notaMatch = notas.find(n => {
+      if (n.status === 'Paga ao médico') return false
+      const recebido = n.recebido || (n.bruto * 0.9385)
+      const diff = Math.abs(recebido - valorT) / Math.max(valorT, 0.01)
+      return diff <= MARGEM
     })
 
-    const totalMedicos = medicosStatus.length
-    const pagos = medicosStatus.filter(m => m.pago).length
+    resultado.push({
+      transacao: t,
+      nota: notaMatch || null,
+      status: notaMatch ? 'encontrada' : 'nao_encontrada'
+    })
+  })
 
-    return {
-      nota, medicosStatus, totalMedicos, pagos,
-      completo: totalMedicos > 0 && pagos === totalMedicos,
-    }
-  }).filter(r => r.pagos > 0) // só mostra notas com pelo menos 1 médico identificado no extrato
-
-  resultado.sort((a, b) => (b.completo - a.completo) || (b.pagos / b.totalMedicos - a.pagos / a.totalMedicos))
   return resultado
 }
 
-// Cruza débitos do extrato com TODAS as notas (independente do status) e agrega por médico,
-// para conferir quanto cada médico realmente recebeu segundo o banco.
-function cruzarDebitosPorMedico(transacoes, notas) {
-  const MARGEM = 0.02
-  const debitos = transacoes.filter(t => t.tipo === 'debito')
-  const usados = new Set()
-
-  const linhas = [] // uma linha por (médico, nota)
-  notas.forEach(nota => {
-    ;(nota.medicos_nota || []).forEach(mn => {
-      const valorAlvo = mn.repasse || 0
-      if (!valorAlvo) return
-      const nomeAlvoNorm = normalizar(mn.nome).split(' ')[0]
-
-      const candidatos = debitos
-        .map((t, idx) => ({ t, idx }))
-        .filter(({ t, idx }) => !usados.has(idx) && Math.abs(Math.abs(t.valor) - valorAlvo) <= Math.max(MARGEM, valorAlvo * 0.005))
-
-      let melhor = null
-      if (candidatos.length === 1) melhor = candidatos[0]
-      else if (candidatos.length > 1) {
-        melhor = candidatos.find(({ t }) => normalizar(t.nome || t.memo).includes(nomeAlvoNorm)) || candidatos[0]
-      }
-      if (melhor) usados.add(melhor.idx)
-
-      linhas.push({
-        medico: mn.nome,
-        nf: nota.nf, tomador: nota.tomador, comp: nota.comp, statusNota: nota.status,
-        valorEsperado: valorAlvo,
-        transacao: melhor?.t || null,
-        pago: !!melhor,
-      })
-    })
-  })
-
-  const porMedico = {}
-  linhas.forEach(l => {
-    if (!porMedico[l.medico]) porMedico[l.medico] = { medico: l.medico, notas: [], valorEsperadoTotal: 0, valorEncontradoTotal: 0, qtdTotal: 0, qtdEncontrada: 0 }
-    const m = porMedico[l.medico]
-    m.notas.push(l)
-    m.valorEsperadoTotal += l.valorEsperado
-    m.qtdTotal += 1
-    if (l.pago) {
-      m.valorEncontradoTotal += Math.abs(l.transacao.valor)
-      m.qtdEncontrada += 1
-    }
-  })
-
-  return Object.values(porMedico)
-    .map(m => ({ ...m, diferenca: m.valorEncontradoTotal - m.valorEsperadoTotal }))
-    .sort((a, b) => a.medico.localeCompare(b.medico, 'pt-BR'))
-}
-
-function AbaExtratoOFX({ notas = [], onRefresh }) {
+export function ExtratoOFX({ notas, onRefresh }) {
   const { toast } = useToast()
+  const [etapa, setEtapa] = useState('upload')
   const [loading, setLoading] = useState(false)
-  const [dandoBaixa, setDandoBaixa] = useState(false)
-  const [cruzamento, setCruzamento] = useState(null)
-  const [porMedico, setPorMedico] = useState(null)
-  const [modoView, setModoView] = useState('nota') // 'nota' | 'medico'
+  const [transacoes, setTransacoes] = useState([])
+  const [cruzamento, setCruzamento] = useState([])
+  const [resultado, setResultado] = useState(null)
   const [selecionadas, setSelecionadas] = useState(new Set())
-  const [expandida, setExpandida] = useState(null)
-  const [expandidoMedico, setExpandidoMedico] = useState(null)
-  const [buscaMedico, setBuscaMedico] = useState('')
   const fileRef = useRef()
 
-  async function processarArquivo(file) {
+  const processarOFX = async (file) => {
     setLoading(true)
     try {
+      // Leitura com encoding Latin-1 (padrão Inter)
       const buffer = await file.arrayBuffer()
       const decoder = new TextDecoder('iso-8859-1')
       const text = decoder.decode(buffer)
+
       const trans = parseOFX(text)
       if (!trans.length) { toast('Nenhuma transação encontrada no extrato.', 'error'); setLoading(false); return }
-      const cruz = cruzarDebitosComNotas(trans, notas)
-      const pm = cruzarDebitosPorMedico(trans, notas)
+
+      const cruz = cruzar(trans, notas)
+      setTransacoes(trans)
       setCruzamento(cruz)
-      setPorMedico(pm)
-      setSelecionadas(new Set(cruz.map((r, i) => r.completo ? i : -1).filter(i => i >= 0)))
-      toast(`${trans.length} transação(ões) no extrato · ${cruz.filter(r => r.completo).length} nota(s) totalmente conferida(s)`)
-    } catch (e) {
-      toast('Erro ao processar o extrato: ' + e.message, 'error')
-    }
+      setSelecionadas(new Set(
+        cruz.map((c, i) => c.status === 'encontrada' ? i : -1).filter(i => i >= 0)
+      ))
+      setEtapa('preview')
+      const encontradas = cruz.filter(c => c.status === 'encontrada').length
+      toast(`${trans.length} transação(ões) · ${encontradas} NF(s) identificada(s) automaticamente!`)
+    } catch(e) { toast('Erro ao processar: ' + e.message, 'error') }
     setLoading(false)
   }
 
-  function reiniciar() { setCruzamento(null); setPorMedico(null); setSelecionadas(new Set()); if (fileRef.current) fileRef.current.value = '' }
-  function toggleSel(i) { setSelecionadas(prev => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n }) }
-
-  async function darBaixa() {
+  const darBaixa = async () => {
     const sels = cruzamento.filter((_, i) => selecionadas.has(i))
-    if (!sels.length) { toast('Selecione ao menos uma nota completa.', 'error'); return }
-    setDandoBaixa(true)
+    if (!sels.length) { toast('Selecione ao menos um item.', 'error'); return }
+    setLoading(true)
     let sucesso = 0, falhas = 0
+
     for (const item of sels) {
+      if (!item.nota) continue
       try {
-        await supabase.from('notas_fiscais').update({ status: 'Paga ao médico' }).eq('id', item.nota.id)
+        await supabase.from('notas_fiscais').update({ status: 'Recebida' }).eq('id', item.nota.id)
         sucesso++
-      } catch (e) { falhas++ }
+      } catch(e) { falhas++ }
     }
-    setDandoBaixa(false)
-    toast(`${sucesso} nota(s) marcada(s) como "Paga ao médico"${falhas ? ` · ${falhas} falha(s)` : ''}`)
-    if (onRefresh) onRefresh()
-    reiniciar()
+
+    setLoading(false)
+    setResultado({ sucesso, falhas })
+    setEtapa('resultado')
+    onRefresh()
   }
 
-  if (!cruzamento) {
-    return (
-      <div>
-        <div style={{ ...cardStyle, padding: '18px 22px', marginBottom: 16, background: 'linear-gradient(135deg, #EBF5FF, #F0F9FF)', border: '1px solid #BFDBFE' }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: G.g2, marginBottom: 6 }}>🏦 Baixa automática de notas via extrato bancário</div>
-          <div style={{ fontSize: 12, color: GRAY[2], lineHeight: 1.5 }}>
-            Envie o extrato OFX do banco. O sistema pega os <strong>débitos</strong> (pagamentos a médicos) e casa cada um com o valor de repasse de cada médico dentro das notas fiscais ainda não marcadas como pagas.
-            Quando <strong>todos os médicos de uma nota</strong> tiverem pagamento identificado no extrato, ela fica disponível pra você confirmar a baixa (status muda para <strong>"Paga ao médico"</strong>). Notas com pagamento parcial aparecem, mas não são marcadas — assim nenhuma nota é dada como paga antes da hora.
-          </div>
-        </div>
-        <div
-          style={{ border: '2px dashed #D4E6DA', borderRadius: 14, padding: 40, textAlign: 'center', cursor: 'pointer', background: GRAY[6] }}
-          onClick={() => fileRef.current.click()}
-          onDragOver={e => e.preventDefault()}
-          onDrop={e => { e.preventDefault(); if (e.dataTransfer.files[0]) processarArquivo(e.dataTransfer.files[0]) }}
-        >
-          <div style={{ fontSize: 40, marginBottom: 12 }}>🏦</div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: GRAY[1], marginBottom: 4 }}>Arraste o extrato OFX aqui</div>
-          <div style={{ fontSize: 12, color: GRAY[3] }}>ou clique para selecionar (.ofx, .qfx)</div>
-        </div>
-        <input ref={fileRef} type="file" accept=".ofx,.qfx,.ofc,.txt" style={{ display: 'none' }}
-          onChange={e => { if (e.target.files[0]) processarArquivo(e.target.files[0]) }} />
-        {loading && <div style={{ textAlign: 'center', padding: 20, color: GRAY[2] }}>Processando extrato...</div>}
-      </div>
-    )
-  }
+  const reiniciar = () => { setEtapa('upload'); setTransacoes([]); setCruzamento([]); setResultado(null); setSelecionadas(new Set()) }
+  const toggleSel = (i) => setSelecionadas(prev => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n })
+  const toggleTodos = () => selecionadas.size === cruzamento.length ? setSelecionadas(new Set()) : setSelecionadas(new Set(cruzamento.map((_, i) => i)))
 
-  const completas = cruzamento.filter(r => r.completo).length
-  const parciais = cruzamento.filter(r => !r.completo).length
-
-  const medicosFiltrados = (porMedico || []).filter(m => !buscaMedico || m.medico.toLowerCase().includes(buscaMedico.toLowerCase()))
+  const encontradas = cruzamento.filter(c => c.status === 'encontrada').length
+  const naoEncontradas = cruzamento.filter(c => c.status === 'nao_encontrada').length
+  const totalCreditos = transacoes.filter(t => t.tipo === 'credito').reduce((a, t) => a + t.valor, 0)
 
   return (
-    <div>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
-        {[{ k: 'nota', label: '📄 Por nota (dar baixa)' }, { k: 'medico', label: '👨‍⚕️ Por médico (conferência)' }].map(t => (
-          <button key={t.k} onClick={() => setModoView(t.k)} style={{
-            padding: '8px 16px', borderRadius: 10, cursor: 'pointer', fontSize: 12.5, fontWeight: 600,
-            border: '1px solid ' + (modoView === t.k ? G.g3 : '#D4E6DA'),
-            background: modoView === t.k ? G.g3 : '#fff',
-            color: modoView === t.k ? '#fff' : GRAY[2],
-          }}>{t.label}</button>
-        ))}
-      </div>
-
-      {modoView === 'nota' ? (
+    <div className="page-content">
+      {etapa === 'upload' && (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
-            <Kpi label="Notas totalmente conferidas" value={completas} sub="todos os médicos pagos" color={G.g2} />
-            <Kpi label="Notas com pagamento parcial" value={parciais} sub="alguns médicos ainda sem match" color={ORANGE} />
-            <Kpi label="Selecionadas para baixa" value={selecionadas.size} sub="serão marcadas como pagas" />
-          </div>
-
-          <div style={{ ...cardStyle, padding: '14px 20px', marginBottom: 16, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-            <button style={btnGhost} onClick={reiniciar}>← Voltar</button>
-            <div style={{ flex: 1 }} />
-            <button style={{ ...btnPrimary, opacity: dandoBaixa || !selecionadas.size ? 0.6 : 1 }} onClick={darBaixa} disabled={dandoBaixa || !selecionadas.size}>
-              {dandoBaixa ? 'Processando…' : `✓ Dar baixa em ${selecionadas.size} nota(s)`}
-            </button>
-          </div>
-
-          <div style={{ ...cardStyle, overflow: 'hidden' }}>
-            <div style={{ padding: '14px 20px', borderBottom: '1px solid #D4E6DA', fontSize: 13, fontWeight: 600, color: GRAY[0] }}>
-              Notas identificadas no extrato ({cruzamento.length})
+          <div style={{ background: 'linear-gradient(135deg, var(--blue-l), var(--g10))', border: '1px solid #BFDBFE', borderRadius: 'var(--radius-xl)', padding: '18px 22px', marginBottom: 16 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--g2)', marginBottom: 10 }}>🏦 Como funciona o cruzamento com extrato</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12 }}>
+              {[
+                { n:'1', t:'Baixe o OFX no Inter', d:'Extrato → Exportar → período desejado → formato OFX' },
+                { n:'2', t:'Cruzamento automático', d:'Compara os créditos do banco com o valor recebido das NFs (bruto − 6,15%)' },
+                { n:'3', t:'Dê baixa', d:'Confirme os matches e marque as NFs como "Recebida" automaticamente' },
+              ].map(s => (
+                <div key={s.n} style={{ background: 'rgba(255,255,255,.7)', borderRadius: 'var(--radius-lg)', padding: '12px 14px', display: 'flex', gap: 10 }}>
+                  <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'var(--g4)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 13, flexShrink: 0 }}>{s.n}</div>
+                  <div><div style={{ fontSize: 12, fontWeight: 600, color: 'var(--n2)', marginBottom: 2 }}>{s.t}</div><div style={{ fontSize: 11, color: 'var(--n4)' }}>{s.d}</div></div>
+                </div>
+              ))}
             </div>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 780 }}>
-                <thead><tr style={{ background: G.g1 }}>
-                  <th style={thStyle}></th>
-                  <th style={thStyle}>NF</th>
-                  <th style={thStyle}>Tomador</th>
-                  <th style={thStyle}>Competência</th>
-                  <th style={{ ...thStyle, textAlign: 'center' }}>Médicos pagos</th>
-                  <th style={{ ...thStyle, textAlign: 'center' }}>Status</th>
-                  <th style={{ ...thStyle, textAlign: 'center' }}></th>
+          </div>
+
+          <div className="card">
+            <div className="card-header"><h3>📂 Importar extrato OFX — Banco Inter</h3></div>
+            <div className="card-body">
+              <div style={{ border: '2px dashed var(--border)', borderRadius: 'var(--radius-lg)', padding: 40, textAlign: 'center', cursor: 'pointer', background: 'var(--n10)', transition: 'all .2s' }}
+                onClick={() => fileRef.current.click()}
+                onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderColor='var(--blue)'; e.currentTarget.style.background='var(--blue-l)' }}
+                onDragLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.background='var(--n10)' }}
+                onDrop={e => { e.preventDefault(); e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.background='var(--n10)'; if(e.dataTransfer.files[0]) processarOFX(e.dataTransfer.files[0]) }}>
+                <div style={{ fontSize: 40, marginBottom: 12 }}>🏦</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--n2)', marginBottom: 4 }}>Arraste o extrato OFX aqui</div>
+                <div style={{ fontSize: 12, color: 'var(--n5)', marginBottom: 12 }}>ou clique para selecionar</div>
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+                  {['OFX','QFX'].map(f => <span key={f} style={{ background: 'var(--blue-l)', color: 'var(--blue)', border: '1px solid #BFDBFE', borderRadius: 99, fontSize: 10, fontWeight: 700, padding: '3px 12px' }}>{f}</span>)}
+                </div>
+              </div>
+            </div>
+          </div>
+          <input ref={fileRef} type="file" accept=".ofx,.qfx,.ofc,.txt" style={{ display: 'none' }} onChange={e => { if(e.target.files[0]) processarOFX(e.target.files[0]) }} />
+          {loading && <div className="loading-full"><div className="spinner spinner-lg"/><span>Processando extrato...</span></div>}
+        </>
+      )}
+
+      {etapa === 'preview' && (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginBottom: 14 }}>
+            {[
+              { bar:'var(--g5)', ic:'var(--g10)', icon:'📊', label:'Total transações', value:transacoes.length, sub:'No extrato' },
+              { bar:'var(--blue)', ic:'var(--blue-l)', icon:'💰', label:'Total créditos', value:brl(totalCreditos), sub:`${transacoes.filter(t=>t.tipo==='credito').length} entradas` },
+              { bar:'var(--g5)', ic:'var(--g10)', icon:'✅', label:'NFs identificadas', value:encontradas, sub:'Match automático' },
+              { bar:'var(--orange)', ic:'var(--orange-l)', icon:'❓', label:'Não identificadas', value:naoEncontradas, sub:'Verificar manualmente' },
+            ].map((k,i) => (
+              <div key={i} className="kpi">
+                <div className="kpi-bar" style={{ background:k.bar }}/>
+                <div className="kpi-icon" style={{ background:k.ic }}>{k.icon}</div>
+                <div className="kpi-label">{k.label}</div>
+                <div className="kpi-value">{k.value}</div>
+                <div className="kpi-sub">{k.sub}</div>
+              </div>
+            ))}
+          </div>
+
+          <div className="card">
+            <div className="table-toolbar">
+              <span className="table-title">Cruzamento extrato × notas fiscais</span>
+              <button className="btn btn-ghost btn-sm" onClick={toggleTodos}>{selecionadas.size === cruzamento.length ? 'Desmarcar todas' : 'Selecionar todas'}</button>
+              <button className="btn btn-ghost btn-sm" onClick={reiniciar}>← Voltar</button>
+              <button className="btn btn-primary btn-sm" onClick={darBaixa} disabled={loading || !selecionadas.size}>
+                {loading ? <><span className="spinner spinner-sm"/> Processando…</> : `✓ Dar baixa em ${selecionadas.size} NF(s)`}
+              </button>
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead><tr>
+                  <th></th>
+                  <th>Data</th><th>Valor banco</th><th>Descrição</th>
+                  <th>NF vinculada</th><th>Tomador</th><th>Valor NF</th><th>Match</th>
                 </tr></thead>
                 <tbody>
-                  {cruzamento.map((r, i) => (
-                    <>
-                      <tr key={i} style={{ background: r.completo ? '#F0FDF4' : '#FFFBEB' }}>
-                        <td style={tdStyle}>
-                          {r.completo && <input type="checkbox" checked={selecionadas.has(i)} onChange={() => toggleSel(i)} />}
-                        </td>
-                        <td style={{ ...tdStyle, fontFamily: 'monospace', fontWeight: 600 }}>{r.nota.nf || '—'}</td>
-                        <td style={{ ...tdStyle, whiteSpace: 'normal', maxWidth: 220 }}>{r.nota.tomador || '—'}</td>
-                        <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{fmtMes(r.nota.comp)}</td>
-                        <td style={{ ...tdStyle, textAlign: 'center', fontFamily: 'monospace', fontWeight: 700 }}>{r.pagos}/{r.totalMedicos}</td>
-                        <td style={{ ...tdStyle, textAlign: 'center' }}>
-                          {r.completo
-                            ? <span style={badge(G.g7, G.g2, G.g6)}>✓ Completa</span>
-                            : <span style={badge('#FFFBEB', ORANGE, '#FDE68A')}>Parcial</span>}
-                        </td>
-                        <td style={{ ...tdStyle, textAlign: 'center' }}>
-                          <button onClick={() => setExpandida(expandida === i ? null : i)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: G.g3, fontSize: 12, fontWeight: 600 }}>
-                            {expandida === i ? 'Ocultar' : 'Ver médicos'}
-                          </button>
-                        </td>
-                      </tr>
-                      {expandida === i && (
-                        <tr>
-                          <td colSpan={7} style={{ padding: 0, borderBottom: '1px solid ' + GRAY[6] }}>
-                            <table style={{ width: '100%', borderCollapse: 'collapse', background: GRAY[6] }}>
-                              <thead><tr>
-                                <th style={{ ...thStyle, background: 'transparent', color: GRAY[2] }}>Médico</th>
-                                <th style={{ ...thStyle, background: 'transparent', color: GRAY[2], textAlign: 'right' }}>Repasse esperado</th>
-                                <th style={{ ...thStyle, background: 'transparent', color: GRAY[2] }}>Data no banco</th>
-                                <th style={{ ...thStyle, background: 'transparent', color: GRAY[2], textAlign: 'center' }}>Status</th>
-                              </tr></thead>
-                              <tbody>
-                                {r.medicosStatus.map((m, j) => (
-                                  <tr key={j}>
-                                    <td style={{ ...tdStyle, whiteSpace: 'normal' }}>{m.nome}</td>
-                                    <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace' }}>R$ {brl(m.valor)}</td>
-                                    <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{m.transacao ? fmtDt(m.transacao.data) : '—'}</td>
-                                    <td style={{ ...tdStyle, textAlign: 'center' }}>
-                                      {m.pago
-                                        ? <span style={badge(G.g7, G.g2, G.g6)}>✓ Encontrado</span>
-                                        : <span style={badge('#FEF2F2', RED, '#FECACA')}>❌ Não encontrado</span>}
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </td>
-                        </tr>
-                      )}
-                    </>
+                  {cruzamento.map((item, i) => (
+                    <tr key={i} style={{ background: item.status==='encontrada'?'#F0FDF4':'#FFFBEB' }}>
+                      <td>{item.nota && <input type="checkbox" checked={selecionadas.has(i)} onChange={() => toggleSel(i)}/>}</td>
+                      <td className="mono">{fmtData(item.transacao.data)}</td>
+                      <td className="mono" style={{ fontWeight:700, color:'var(--g3)' }}>{brl(item.transacao.valor)}</td>
+                      <td style={{ fontSize:11, color:'var(--n4)', maxWidth:200, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={item.transacao.memo}>{item.transacao.memo}</td>
+                      <td className="mono" style={{ fontWeight:600 }}>{item.nota?.nf || '—'}</td>
+                      <td style={{ fontSize:11 }}>{item.nota?.tomador || '—'}</td>
+                      <td className="mono">{item.nota ? brl(item.nota.recebido || item.nota.bruto * 0.9385) : '—'}</td>
+                      <td>
+                        {item.status==='encontrada'
+                          ? <span style={{ background:'var(--g10)', color:'var(--g3)', border:'1px solid var(--g8)', borderRadius:99, fontSize:10, fontWeight:700, padding:'2px 8px' }}>✓ Match</span>
+                          : <span style={{ background:'var(--yellow-l)', color:'var(--yellow)', border:'1px solid #FDE68A', borderRadius:99, fontSize:10, fontWeight:700, padding:'2px 8px' }}>? Não encontrado</span>
+                        }
+                      </td>
+                    </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           </div>
         </>
-      ) : (
-        <>
-          <div style={{ ...cardStyle, padding: '18px 22px', marginBottom: 16, background: 'linear-gradient(135deg, #EBF5FF, #F0F9FF)', border: '1px solid #BFDBFE' }}>
-            <div style={{ fontSize: 13, color: GRAY[2], lineHeight: 1.5 }}>
-              Para cada médico: <strong>Valor esperado</strong> é a soma dos repasses de todas as notas fiscais dele no sistema (pagas ou não). <strong>Valor no extrato</strong> é a soma dos débitos do banco que bateram com algum desses valores. Se as duas colunas não baterem, use a lista de notas expandida pra achar qual NF específica está causando a diferença.
-            </div>
-          </div>
-
-          <div style={{ ...cardStyle, padding: '14px 20px', marginBottom: 16, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-            <button style={btnGhost} onClick={reiniciar}>← Voltar</button>
-            <input type="text" placeholder="🔍 Buscar médico..." value={buscaMedico} onChange={e => setBuscaMedico(e.target.value)}
-              style={{ ...inputStyle, minWidth: 220 }} />
-            <div style={{ flex: 1 }} />
-            <span style={{ fontSize: 12, color: GRAY[3] }}>{medicosFiltrados.length} médico(s)</span>
-          </div>
-
-          <div style={{ ...cardStyle, overflow: 'hidden' }}>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 780 }}>
-                <thead><tr style={{ background: G.g1 }}>
-                  <th style={thStyle}>Médico</th>
-                  <th style={{ ...thStyle, textAlign: 'center' }}>Notas conferidas</th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>Valor esperado (sistema)</th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>Valor no extrato (banco)</th>
-                  <th style={{ ...thStyle, textAlign: 'right' }}>Diferença</th>
-                  <th style={{ ...thStyle, textAlign: 'center' }}></th>
-                </tr></thead>
-                <tbody>
-                  {medicosFiltrados.length === 0 && (
-                    <tr><td colSpan={6} style={{ ...tdStyle, textAlign: 'center', color: GRAY[3], padding: 30 }}>Nenhum médico encontrado.</td></tr>
-                  )}
-                  {medicosFiltrados.map((m, i) => {
-                    const completo = m.qtdEncontrada === m.qtdTotal
-                    return (
-                      <>
-                        <tr key={i} style={{ background: Math.abs(m.diferenca) < 0.01 ? '#F0FDF4' : '#FFFBEB' }}>
-                          <td style={{ ...tdStyle, fontWeight: 600, whiteSpace: 'normal' }}>{m.medico}</td>
-                          <td style={{ ...tdStyle, textAlign: 'center', fontFamily: 'monospace' }}>{m.qtdEncontrada}/{m.qtdTotal}</td>
-                          <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace' }}>R$ {brl(m.valorEsperadoTotal)}</td>
-                          <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: G.g2 }}>R$ {brl(m.valorEncontradoTotal)}</td>
-                          <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: Math.abs(m.diferenca) < 0.01 ? GRAY[3] : m.diferenca > 0 ? G.g2 : RED }}>
-                            {m.diferenca >= 0 ? '+' : '-'}R$ {brl(Math.abs(m.diferenca))}
-                          </td>
-                          <td style={{ ...tdStyle, textAlign: 'center' }}>
-                            <button onClick={() => setExpandidoMedico(expandidoMedico === i ? null : i)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: G.g3, fontSize: 12, fontWeight: 600 }}>
-                              {expandidoMedico === i ? 'Ocultar' : 'Ver notas'}
-                            </button>
-                          </td>
-                        </tr>
-                        {expandidoMedico === i && (
-                          <tr>
-                            <td colSpan={6} style={{ padding: 0, borderBottom: '1px solid ' + GRAY[6] }}>
-                              <table style={{ width: '100%', borderCollapse: 'collapse', background: GRAY[6] }}>
-                                <thead><tr>
-                                  <th style={{ ...thStyle, background: 'transparent', color: GRAY[2] }}>NF</th>
-                                  <th style={{ ...thStyle, background: 'transparent', color: GRAY[2] }}>Tomador</th>
-                                  <th style={{ ...thStyle, background: 'transparent', color: GRAY[2] }}>Competência</th>
-                                  <th style={{ ...thStyle, background: 'transparent', color: GRAY[2], textAlign: 'right' }}>Esperado</th>
-                                  <th style={{ ...thStyle, background: 'transparent', color: GRAY[2] }}>Data banco</th>
-                                  <th style={{ ...thStyle, background: 'transparent', color: GRAY[2], textAlign: 'center' }}>Status nota</th>
-                                  <th style={{ ...thStyle, background: 'transparent', color: GRAY[2], textAlign: 'center' }}>Match</th>
-                                </tr></thead>
-                                <tbody>
-                                  {m.notas.map((n, j) => (
-                                    <tr key={j}>
-                                      <td style={{ ...tdStyle, fontFamily: 'monospace', fontWeight: 600 }}>{n.nf || '—'}</td>
-                                      <td style={{ ...tdStyle, whiteSpace: 'normal' }}>{n.tomador || '—'}</td>
-                                      <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{fmtMes(n.comp)}</td>
-                                      <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace' }}>R$ {brl(n.valorEsperado)}</td>
-                                      <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{n.transacao ? fmtDt(n.transacao.data) : '—'}</td>
-                                      <td style={{ ...tdStyle, textAlign: 'center' }}>{n.statusNota || '—'}</td>
-                                      <td style={{ ...tdStyle, textAlign: 'center' }}>
-                                        {n.pago
-                                          ? <span style={badge(G.g7, G.g2, G.g6)}>✓</span>
-                                          : <span style={badge('#FEF2F2', RED, '#FECACA')}>❌</span>}
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </td>
-                          </tr>
-                        )}
-                      </>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </>
       )}
-    </div>
-  )
-}
 
-export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomadores = [], onRefresh }) {
-  const [aba, setAba] = useState('caixa')
-  const [fMedico, setFMedico] = useState('')
-  const [fComp, setFComp] = useState('')
-  const [fTomador, setFTomador] = useState('')
-  const [fDataIni, setFDataIni] = useState('')
-  const [fDataFim, setFDataFim] = useState('')
-
-  const medicosOpts = useMemo(() => {
-    const s = new Set(medicos.map(m => m.nome).filter(Boolean))
-    notas.forEach(n => (n.medicos_nota || []).forEach(mn => mn.nome && s.add(mn.nome)))
-    return [...s].sort()
-  }, [medicos, notas])
-
-  const competenciasOpts = useMemo(() => {
-    const s = new Set(notas.map(n => n.comp).filter(Boolean))
-    return [...s].sort().reverse()
-  }, [notas])
-
-  const tomadoresOpts = useMemo(() => {
-    const s = new Set(tomadores.map(t => t.nome).filter(Boolean))
-    notas.forEach(n => n.tomador && s.add(n.tomador))
-    return [...s].sort()
-  }, [tomadores, notas])
-
-  const linhas = useMemo(() => {
-    const out = []
-    notas.forEach(n => {
-      if (fTomador && n.tomador !== fTomador) return
-      if (fComp && n.comp !== fComp) return
-      ;(n.medicos_nota || []).forEach(mn => {
-        if (fMedico && mn.nome !== fMedico) return
-        out.push({
-          nf: n.nf, tomador: n.tomador, comp: n.comp, status: n.status,
-          medico: mn.nome, bruto: mn.valor_bruto_medico || 0, repasse: mn.repasse || 0,
-        })
-      })
-    })
-    return out
-  }, [notas, fMedico, fComp, fTomador])
-
-  const comprovantesFiltrados = useMemo(() => {
-    return comprovantes.filter(c => {
-      if (fMedico && c.medico_nome !== fMedico) return false
-      if (fTomador && c.tomador !== fTomador) return false
-      if (fComp && c.competencia !== fComp) return false
-      if (fDataIni && (!c.data_pagamento || c.data_pagamento < fDataIni)) return false
-      if (fDataFim && (!c.data_pagamento || c.data_pagamento > fDataFim)) return false
-      return true
-    })
-  }, [comprovantes, fMedico, fComp, fTomador, fDataIni, fDataFim])
-
-  const totalBruto = linhas.reduce((a, l) => a + l.bruto, 0)
-  const totalDevido = linhas.reduce((a, l) => a + l.repasse, 0)
-  const totalPago = comprovantesFiltrados.reduce((a, c) => a + (c.valor_repasse || 0), 0)
-  const diferenca = totalPago - totalDevido
-
-  const porMedico = useMemo(() => {
-    const m = {}
-    linhas.forEach(l => {
-      if (!m[l.medico]) m[l.medico] = { medico: l.medico, qtdNotas: 0, bruto: 0, devido: 0, pago: 0 }
-      m[l.medico].qtdNotas++
-      m[l.medico].bruto += l.bruto
-      m[l.medico].devido += l.repasse
-    })
-    comprovantesFiltrados.forEach(c => {
-      const nome = c.medico_nome
-      if (!nome) return
-      if (!m[nome]) m[nome] = { medico: nome, qtdNotas: 0, bruto: 0, devido: 0, pago: 0 }
-      m[nome].pago += c.valor_repasse || 0
-    })
-    return Object.values(m).sort((a, b) => a.medico.localeCompare(b.medico))
-  }, [linhas, comprovantesFiltrados])
-
-  function limparFiltros() { setFMedico(''); setFComp(''); setFTomador(''); setFDataIni(''); setFDataFim('') }
-
-  function exportarCSV() {
-    const headers = ['NF', 'Tomador', 'Competência', 'Médico', 'Bruto', 'Repasse (devido)', 'Status']
-    const rows = linhas.map(l => [l.nf, l.tomador, fmtMes(l.comp), l.medico, l.bruto.toFixed(2).replace('.', ','), l.repasse.toFixed(2).replace('.', ','), l.status])
-    const csv = [headers, ...rows].map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(';')).join('\n')
-    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `relatorio_medico_competencia_tomador.csv`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
-  return (
-    <div style={{ height: '100%', overflowY: 'auto', overflowX: 'hidden' }}>
-      <div style={{ padding: 24, maxWidth: 1200, margin: '0 auto' }}>
-
-        <div style={{ background: `linear-gradient(135deg, ${G.g1} 0%, ${G.g3} 100%)`, borderRadius: 20, padding: '24px 28px', marginBottom: 16 }}>
-          <div style={{ fontSize: 16, fontWeight: 700, color: '#fff' }}>📈 Regime de caixa</div>
-          <div style={{ fontSize: 12, color: 'rgba(255,255,255,.55)', marginTop: 4, maxWidth: 620, lineHeight: 1.5 }}>
-            Cruza os valores lançados nas notas fiscais com o que foi efetivamente pago aos médicos, e confere com o extrato bancário real.
+      {etapa === 'resultado' && resultado && (
+        <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', minHeight:400, gap:20 }}>
+          <div style={{ fontSize:64 }}>{resultado.falhas===0?'🎉':'⚠️'}</div>
+          <div style={{ textAlign:'center' }}>
+            <div style={{ fontSize:22, fontWeight:800, color:'var(--n1)', marginBottom:8 }}>Baixa realizada!</div>
+            <div style={{ fontSize:14, color:'var(--n4)' }}>
+              <span style={{ color:'var(--g3)', fontWeight:700 }}>{resultado.sucesso}</span> NF(s) marcadas como <strong>Recebida</strong>
+              {resultado.falhas>0 && <span style={{ color:'var(--red)', fontWeight:700 }}> · {resultado.falhas} falha(s)</span>}
+            </div>
+          </div>
+          <div style={{ display:'flex', gap:10 }}>
+            <button className="btn btn-outline" onClick={reiniciar}>⬆ Importar outro extrato</button>
+            <button className="btn btn-primary" onClick={() => window.location.href='/pendencias'}>📋 Ver pendências</button>
           </div>
         </div>
-
-        <div style={{ display: 'flex', gap: 6, marginBottom: 16, borderBottom: '1px solid #D4E6DA' }}>
-          {[{ k: 'caixa', label: '📊 Regime de caixa' }, { k: 'ofx', label: '🏦 Extrato bancário (OFX)' }].map(t => (
-            <button key={t.k} onClick={() => setAba(t.k)} style={{
-              padding: '10px 18px', border: 'none', background: 'none', cursor: 'pointer',
-              fontSize: 13, fontWeight: 600, color: aba === t.k ? G.g2 : GRAY[3],
-              borderBottom: aba === t.k ? `2px solid ${G.g3}` : '2px solid transparent', marginBottom: -1,
-            }}>{t.label}</button>
-          ))}
-        </div>
-
-        {aba === 'ofx' ? (
-          <AbaExtratoOFX notas={notas} onRefresh={onRefresh} />
-        ) : (
-          <>
-            <div style={{ ...cardStyle, padding: '16px 20px', marginBottom: 16, display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-              <div>
-                <label style={labelStyle}>Médico</label>
-                <select style={inputStyle} value={fMedico} onChange={e => setFMedico(e.target.value)}>
-                  <option value="">Todos os médicos</option>
-                  {medicosOpts.map(m => <option key={m} value={m}>{m}</option>)}
-                </select>
-              </div>
-              <div>
-                <label style={labelStyle}>Competência</label>
-                <select style={inputStyle} value={fComp} onChange={e => setFComp(e.target.value)}>
-                  <option value="">Todas</option>
-                  {competenciasOpts.map(c => <option key={c} value={c}>{fmtMes(c)}</option>)}
-                </select>
-              </div>
-              <div>
-                <label style={labelStyle}>Tomador</label>
-                <select style={inputStyle} value={fTomador} onChange={e => setFTomador(e.target.value)}>
-                  <option value="">Todos</option>
-                  {tomadoresOpts.map(t => <option key={t} value={t}>{t}</option>)}
-                </select>
-              </div>
-              <div>
-                <label style={labelStyle}>Pago de</label>
-                <input type="date" style={inputStyle} value={fDataIni} onChange={e => setFDataIni(e.target.value)} />
-              </div>
-              <div>
-                <label style={labelStyle}>Pago até</label>
-                <input type="date" style={inputStyle} value={fDataFim} onChange={e => setFDataFim(e.target.value)} />
-              </div>
-              <div style={{ flex: 1 }} />
-              <button onClick={limparFiltros} style={btnGhost}>Limpar filtros</button>
-              <button onClick={exportarCSV} style={btnPrimary}>📥 Exportar CSV</button>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
-              <Kpi label="Total bruto" value={`R$ ${brl(totalBruto)}`} sub="valor emitido nas notas" />
-              <Kpi label="Total devido (repasse)" value={`R$ ${brl(totalDevido)}`} sub="segundo as notas fiscais" />
-              <Kpi label="Total pago (caixa)" value={`R$ ${brl(totalPago)}`} sub="segundo os comprovantes" color={G.g2} />
-              <Kpi label="Diferença" value={`${diferenca >= 0 ? '' : '-'}R$ ${brl(Math.abs(diferenca))}`} sub="pago − devido" color={Math.abs(diferenca) < 0.01 ? GRAY[3] : diferenca > 0 ? G.g2 : RED} />
-            </div>
-
-            <div style={{ ...cardStyle, overflow: 'hidden', marginBottom: 16 }}>
-              <div style={{ padding: '14px 20px', borderBottom: '1px solid #D4E6DA', fontSize: 13, fontWeight: 600, color: GRAY[0] }}>
-                Resumo por médico ({porMedico.length})
-              </div>
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 700 }}>
-                  <thead><tr style={{ background: G.g1 }}>
-                    <th style={thStyle}>Médico</th>
-                    <th style={{ ...thStyle, textAlign: 'center' }}>Nº notas</th>
-                    <th style={{ ...thStyle, textAlign: 'right' }}>Bruto</th>
-                    <th style={{ ...thStyle, textAlign: 'right' }}>Devido (repasse)</th>
-                    <th style={{ ...thStyle, textAlign: 'right' }}>Pago (caixa)</th>
-                    <th style={{ ...thStyle, textAlign: 'right' }}>Diferença</th>
-                  </tr></thead>
-                  <tbody>
-                    {porMedico.length === 0 && (
-                      <tr><td colSpan={6} style={{ ...tdStyle, textAlign: 'center', color: GRAY[3], padding: 30 }}>Nenhum resultado para os filtros selecionados.</td></tr>
-                    )}
-                    {porMedico.map(m => {
-                      const dif = m.pago - m.devido
-                      return (
-                        <tr key={m.medico}>
-                          <td style={{ ...tdStyle, fontWeight: 600, whiteSpace: 'normal', color: GRAY[1] }}>{m.medico}</td>
-                          <td style={{ ...tdStyle, textAlign: 'center', fontFamily: 'monospace' }}>{m.qtdNotas}</td>
-                          <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace' }}>R$ {brl(m.bruto)}</td>
-                          <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace' }}>R$ {brl(m.devido)}</td>
-                          <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace' }}>R$ {brl(m.pago)}</td>
-                          <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: Math.abs(dif) < 0.01 ? GRAY[3] : dif > 0 ? G.g2 : RED }}>
-                            {dif >= 0 ? '+' : '-'}R$ {brl(Math.abs(dif))}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <div style={{ ...cardStyle, overflow: 'hidden', marginBottom: 24 }}>
-              <div style={{ padding: '14px 20px', borderBottom: '1px solid #D4E6DA', fontSize: 13, fontWeight: 600, color: GRAY[0] }}>
-                Detalhamento por nota ({linhas.length})
-              </div>
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 780 }}>
-                  <thead><tr style={{ background: G.g1 }}>
-                    <th style={thStyle}>NF</th>
-                    <th style={thStyle}>Tomador</th>
-                    <th style={thStyle}>Competência</th>
-                    <th style={thStyle}>Médico</th>
-                    <th style={{ ...thStyle, textAlign: 'right' }}>Bruto</th>
-                    <th style={{ ...thStyle, textAlign: 'right' }}>Repasse</th>
-                    <th style={{ ...thStyle, textAlign: 'center' }}>Status</th>
-                  </tr></thead>
-                  <tbody>
-                    {linhas.length === 0 && (
-                      <tr><td colSpan={7} style={{ ...tdStyle, textAlign: 'center', color: GRAY[3], padding: 30 }}>Nenhuma nota encontrada para os filtros selecionados.</td></tr>
-                    )}
-                    {linhas.map((l, i) => (
-                      <tr key={i}>
-                        <td style={{ ...tdStyle, fontFamily: 'monospace', fontWeight: 600 }}>{l.nf || '—'}</td>
-                        <td style={{ ...tdStyle, whiteSpace: 'normal' }}>{l.tomador || '—'}</td>
-                        <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{fmtMes(l.comp)}</td>
-                        <td style={{ ...tdStyle, whiteSpace: 'normal' }}>{l.medico}</td>
-                        <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace' }}>R$ {brl(l.bruto)}</td>
-                        <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace', fontWeight: 600, color: G.g2 }}>R$ {brl(l.repasse)}</td>
-                        <td style={{ ...tdStyle, textAlign: 'center' }}>{l.status || '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </>
-        )}
-      </div>
+      )}
     </div>
   )
 }
