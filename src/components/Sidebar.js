@@ -6,6 +6,7 @@ import { useToast } from './Toast'
 const navItems = [
   { section: 'Principal' },
   { path: '/', icon: '📊', label: 'Dashboard' },
+  { path: '/gargalos', icon: '⚠️', label: 'Gargalos & Prejuízo', badge: 'gargalo', badgeColor: 'orange' },
   { path: '/notas', icon: '📄', label: 'Notas fiscais', badge: 'nf', badgeColor: 'ok' },
   { path: '/importacao', icon: '📥', label: 'Importar NFs' },
   { path: '/extrato', icon: '🏦', label: 'Extrato OFX' },
