@@ -24,6 +24,7 @@ import { Repasses } from './Repasses'
 import { ConferenciaPDF } from './ConferenciaPDF'
 import { ExtratoOFX } from './ExtratoOFX'
 import { Solicitacoes } from './Solicitacoes'
+import { Gargalos } from './Gargalos'
 
 async function safeQueryCustom(fn) {
   try {
@@ -67,6 +68,7 @@ export function AppLayout() {
     cb: data.cashbacks.filter(c => c.status === 'pendente').length,
     contas: data.contas.filter(c => c.status === 'pendente').length,
     solic: data.solicitacoes.filter(s => s.status === 'Pendente').length,
+    gargalo: data.notas.filter(n => n.status === 'Emitida').length + data.notas.filter(n => n.valor_recebido_real != null && n.valor_recebido_real < (n.recebido || 0) - 0.01).length,
   }
 
   if (loading) return (
@@ -87,6 +89,7 @@ export function AppLayout() {
           <Route path="/notas" element={<Notas {...props} />} />
           <Route path="/importacao" element={<ImportacaoNF {...props} />} />
           <Route path="/solicitacoes" element={<Solicitacoes {...props} />} />
+          <Route path="/gargalos" element={<Gargalos {...props} />} />
           <Route path="/pendencias" element={<Pendencias {...props} />} />
           <Route path="/medicos" element={<Medicos {...props} />} />
           <Route path="/tomadores" element={<Tomadores {...props} />} />
