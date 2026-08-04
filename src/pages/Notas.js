@@ -43,7 +43,7 @@ export function Notas({ notas, medicos, onRefresh }) {
   const [sortKey, setSortKey] = useState('criado_em')
   const [sortDir, setSortDir] = useState('desc')
   const [medSel, setMedSel] = useState([])
-  const [form, setForm] = useState({ nf: '', tomador: '', comp: '', mes_recebimento: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
+  const [form, setForm] = useState({ nf: '', tomador: '', comp: '', mes_recebimento: '', valor_recebido_real: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
   // Importação Excel médicos
   const [importPreview, setImportPreview] = useState([])
   const [importErro, setImportErro] = useState('')
@@ -89,7 +89,9 @@ export function Notas({ notas, medicos, onRefresh }) {
   const filtradas = useMemo(() => {
     let f = notas.filter(n =>
       (!busca || n.nf?.toLowerCase().includes(busca.toLowerCase()) || n.tomador?.toLowerCase().includes(busca.toLowerCase())) &&
-      (!fltStatus || n.status === fltStatus) &&
+      (fltStatus === '__diferenca__'
+        ? !!(n.mes_recebimento && n.mes_recebimento !== n.comp)
+        : (!fltStatus || n.status === fltStatus)) &&
       (!fltComp || n.comp === fltComp) &&
       (!fltTomador || n.tomador === fltTomador)
     )
@@ -148,7 +150,7 @@ export function Notas({ notas, medicos, onRefresh }) {
 
   const abrirNova = () => {
     setEditando(null)
-    setForm({ nf: '', tomador: '', comp: '', mes_recebimento: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
+    setForm({ nf: '', tomador: '', comp: '', mes_recebimento: '', valor_recebido_real: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
     setMedSel([])
     setAbaModal('dados')
     setImportPreview([])
@@ -158,7 +160,7 @@ export function Notas({ notas, medicos, onRefresh }) {
 
   const abrirEditar = (nota) => {
     setEditando(nota)
-    setForm({ nf: nota.nf || '', tomador: nota.tomador || '', comp: nota.comp || '', mes_recebimento: nota.mes_recebimento || '', emissao: nota.emissao?.split('T')[0] || '', status: nota.status || 'Emitida', obs: nota.obs || '', bruto: nota.bruto || '' })
+    setForm({ nf: nota.nf || '', tomador: nota.tomador || '', comp: nota.comp || '', mes_recebimento: nota.mes_recebimento || '', valor_recebido_real: nota.valor_recebido_real ?? '', emissao: nota.emissao?.split('T')[0] || '', status: nota.status || 'Emitida', obs: nota.obs || '', bruto: nota.bruto || '' })
     setMedSel(nota.medicos_nota?.map(mn => ({ nome: mn.nome, crm: mn.crm || '', ret: mn.retencao_individual || 13, valor: mn.valor_bruto_medico || '' })) || [])
     setAbaModal('dados')
     setImportPreview([])
@@ -286,6 +288,7 @@ export function Notas({ notas, medicos, onRefresh }) {
       margem: calc.margem, pct_margem: calc.pct_margem,
       ir: calc.ir, csll: calc.csll, pis: calc.pis, cofins: calc.cofins,
       mes_recebimento: form.mes_recebimento || null,
+      valor_recebido_real: form.valor_recebido_real !== '' ? parseFloat(form.valor_recebido_real) : null,
       medicos_nota: medicos_nota.length ? medicos_nota : null, nomes_medicos: medSel.map(m => m.nome).join(', ') || null
     }
     setLoading(true)
@@ -415,6 +418,7 @@ export function Notas({ notas, medicos, onRefresh }) {
               <option value="Emitida">Emitida</option>
               <option value="Recebida">Recebida</option>
               <option value="Paga ao médico">Paga ao médico</option>
+              <option value="__diferenca__">⚠️ Recebida com diferença</option>
             </select>
             <select className="filter-select" value={fltComp} onChange={e => setFltComp(e.target.value)}>
               <option value="">Competências</option>
@@ -635,6 +639,10 @@ export function Notas({ notas, medicos, onRefresh }) {
                   <input type={t} value={form[k]} onChange={e => setForm(f=>({...f,[k]:e.target.value}))} placeholder={p}/>
                 </div>
               ))}
+              <div className="field">
+                <label>Valor recebido real (R$) — se diferente do esperado</label>
+                <input type="number" min="0" step="0.01" value={form.valor_recebido_real} onChange={e => setForm(f=>({...f,valor_recebido_real:e.target.value}))} placeholder="deixe vazio se recebeu o valor esperado"/>
+              </div>
               <div className="field">
                 <label>Status</label>
                 <select value={form.status} onChange={e => setForm(f=>({...f,status:e.target.value}))}>
