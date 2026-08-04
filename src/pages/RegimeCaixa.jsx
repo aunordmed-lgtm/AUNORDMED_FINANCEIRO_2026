@@ -120,13 +120,70 @@ function cruzarDebitosComNotas(transacoes, notas) {
   return resultado
 }
 
+// Cruza débitos do extrato com TODAS as notas (independente do status) e agrega por médico,
+// para conferir quanto cada médico realmente recebeu segundo o banco.
+function cruzarDebitosPorMedico(transacoes, notas) {
+  const MARGEM = 0.02
+  const debitos = transacoes.filter(t => t.tipo === 'debito')
+  const usados = new Set()
+
+  const linhas = [] // uma linha por (médico, nota)
+  notas.forEach(nota => {
+    ;(nota.medicos_nota || []).forEach(mn => {
+      const valorAlvo = mn.repasse || 0
+      if (!valorAlvo) return
+      const nomeAlvoNorm = normalizar(mn.nome).split(' ')[0]
+
+      const candidatos = debitos
+        .map((t, idx) => ({ t, idx }))
+        .filter(({ t, idx }) => !usados.has(idx) && Math.abs(Math.abs(t.valor) - valorAlvo) <= Math.max(MARGEM, valorAlvo * 0.005))
+
+      let melhor = null
+      if (candidatos.length === 1) melhor = candidatos[0]
+      else if (candidatos.length > 1) {
+        melhor = candidatos.find(({ t }) => normalizar(t.nome || t.memo).includes(nomeAlvoNorm)) || candidatos[0]
+      }
+      if (melhor) usados.add(melhor.idx)
+
+      linhas.push({
+        medico: mn.nome,
+        nf: nota.nf, tomador: nota.tomador, comp: nota.comp, statusNota: nota.status,
+        valorEsperado: valorAlvo,
+        transacao: melhor?.t || null,
+        pago: !!melhor,
+      })
+    })
+  })
+
+  const porMedico = {}
+  linhas.forEach(l => {
+    if (!porMedico[l.medico]) porMedico[l.medico] = { medico: l.medico, notas: [], valorEsperadoTotal: 0, valorEncontradoTotal: 0, qtdTotal: 0, qtdEncontrada: 0 }
+    const m = porMedico[l.medico]
+    m.notas.push(l)
+    m.valorEsperadoTotal += l.valorEsperado
+    m.qtdTotal += 1
+    if (l.pago) {
+      m.valorEncontradoTotal += Math.abs(l.transacao.valor)
+      m.qtdEncontrada += 1
+    }
+  })
+
+  return Object.values(porMedico)
+    .map(m => ({ ...m, diferenca: m.valorEncontradoTotal - m.valorEsperadoTotal }))
+    .sort((a, b) => a.medico.localeCompare(b.medico, 'pt-BR'))
+}
+
 function AbaExtratoOFX({ notas = [], onRefresh }) {
   const { toast } = useToast()
   const [loading, setLoading] = useState(false)
   const [dandoBaixa, setDandoBaixa] = useState(false)
   const [cruzamento, setCruzamento] = useState(null)
+  const [porMedico, setPorMedico] = useState(null)
+  const [modoView, setModoView] = useState('nota') // 'nota' | 'medico'
   const [selecionadas, setSelecionadas] = useState(new Set())
   const [expandida, setExpandida] = useState(null)
+  const [expandidoMedico, setExpandidoMedico] = useState(null)
+  const [buscaMedico, setBuscaMedico] = useState('')
   const fileRef = useRef()
 
   async function processarArquivo(file) {
@@ -138,7 +195,9 @@ function AbaExtratoOFX({ notas = [], onRefresh }) {
       const trans = parseOFX(text)
       if (!trans.length) { toast('Nenhuma transação encontrada no extrato.', 'error'); setLoading(false); return }
       const cruz = cruzarDebitosComNotas(trans, notas)
+      const pm = cruzarDebitosPorMedico(trans, notas)
       setCruzamento(cruz)
+      setPorMedico(pm)
       setSelecionadas(new Set(cruz.map((r, i) => r.completo ? i : -1).filter(i => i >= 0)))
       toast(`${trans.length} transação(ões) no extrato · ${cruz.filter(r => r.completo).length} nota(s) totalmente conferida(s)`)
     } catch (e) {
@@ -147,7 +206,7 @@ function AbaExtratoOFX({ notas = [], onRefresh }) {
     setLoading(false)
   }
 
-  function reiniciar() { setCruzamento(null); setSelecionadas(new Set()); if (fileRef.current) fileRef.current.value = '' }
+  function reiniciar() { setCruzamento(null); setPorMedico(null); setSelecionadas(new Set()); if (fileRef.current) fileRef.current.value = '' }
   function toggleSel(i) { setSelecionadas(prev => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n }) }
 
   async function darBaixa() {
@@ -197,93 +256,201 @@ function AbaExtratoOFX({ notas = [], onRefresh }) {
   const completas = cruzamento.filter(r => r.completo).length
   const parciais = cruzamento.filter(r => !r.completo).length
 
+  const medicosFiltrados = (porMedico || []).filter(m => !buscaMedico || m.medico.toLowerCase().includes(buscaMedico.toLowerCase()))
+
   return (
     <div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
-        <Kpi label="Notas totalmente conferidas" value={completas} sub="todos os médicos pagos" color={G.g2} />
-        <Kpi label="Notas com pagamento parcial" value={parciais} sub="alguns médicos ainda sem match" color={ORANGE} />
-        <Kpi label="Selecionadas para baixa" value={selecionadas.size} sub="serão marcadas como pagas" />
+      <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
+        {[{ k: 'nota', label: '📄 Por nota (dar baixa)' }, { k: 'medico', label: '👨‍⚕️ Por médico (conferência)' }].map(t => (
+          <button key={t.k} onClick={() => setModoView(t.k)} style={{
+            padding: '8px 16px', borderRadius: 10, cursor: 'pointer', fontSize: 12.5, fontWeight: 600,
+            border: '1px solid ' + (modoView === t.k ? G.g3 : '#D4E6DA'),
+            background: modoView === t.k ? G.g3 : '#fff',
+            color: modoView === t.k ? '#fff' : GRAY[2],
+          }}>{t.label}</button>
+        ))}
       </div>
 
-      <div style={{ ...cardStyle, padding: '14px 20px', marginBottom: 16, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <button style={btnGhost} onClick={reiniciar}>← Voltar</button>
-        <div style={{ flex: 1 }} />
-        <button style={{ ...btnPrimary, opacity: dandoBaixa || !selecionadas.size ? 0.6 : 1 }} onClick={darBaixa} disabled={dandoBaixa || !selecionadas.size}>
-          {dandoBaixa ? 'Processando…' : `✓ Dar baixa em ${selecionadas.size} nota(s)`}
-        </button>
-      </div>
+      {modoView === 'nota' ? (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
+            <Kpi label="Notas totalmente conferidas" value={completas} sub="todos os médicos pagos" color={G.g2} />
+            <Kpi label="Notas com pagamento parcial" value={parciais} sub="alguns médicos ainda sem match" color={ORANGE} />
+            <Kpi label="Selecionadas para baixa" value={selecionadas.size} sub="serão marcadas como pagas" />
+          </div>
 
-      <div style={{ ...cardStyle, overflow: 'hidden' }}>
-        <div style={{ padding: '14px 20px', borderBottom: '1px solid #D4E6DA', fontSize: 13, fontWeight: 600, color: GRAY[0] }}>
-          Notas identificadas no extrato ({cruzamento.length})
-        </div>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 780 }}>
-            <thead><tr style={{ background: G.g1 }}>
-              <th style={thStyle}></th>
-              <th style={thStyle}>NF</th>
-              <th style={thStyle}>Tomador</th>
-              <th style={thStyle}>Competência</th>
-              <th style={{ ...thStyle, textAlign: 'center' }}>Médicos pagos</th>
-              <th style={{ ...thStyle, textAlign: 'center' }}>Status</th>
-              <th style={{ ...thStyle, textAlign: 'center' }}></th>
-            </tr></thead>
-            <tbody>
-              {cruzamento.map((r, i) => (
-                <>
-                  <tr key={i} style={{ background: r.completo ? '#F0FDF4' : '#FFFBEB' }}>
-                    <td style={tdStyle}>
-                      {r.completo && <input type="checkbox" checked={selecionadas.has(i)} onChange={() => toggleSel(i)} />}
-                    </td>
-                    <td style={{ ...tdStyle, fontFamily: 'monospace', fontWeight: 600 }}>{r.nota.nf || '—'}</td>
-                    <td style={{ ...tdStyle, whiteSpace: 'normal', maxWidth: 220 }}>{r.nota.tomador || '—'}</td>
-                    <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{fmtMes(r.nota.comp)}</td>
-                    <td style={{ ...tdStyle, textAlign: 'center', fontFamily: 'monospace', fontWeight: 700 }}>{r.pagos}/{r.totalMedicos}</td>
-                    <td style={{ ...tdStyle, textAlign: 'center' }}>
-                      {r.completo
-                        ? <span style={badge(G.g7, G.g2, G.g6)}>✓ Completa</span>
-                        : <span style={badge('#FFFBEB', ORANGE, '#FDE68A')}>Parcial</span>}
-                    </td>
-                    <td style={{ ...tdStyle, textAlign: 'center' }}>
-                      <button onClick={() => setExpandida(expandida === i ? null : i)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: G.g3, fontSize: 12, fontWeight: 600 }}>
-                        {expandida === i ? 'Ocultar' : 'Ver médicos'}
-                      </button>
-                    </td>
-                  </tr>
-                  {expandida === i && (
-                    <tr>
-                      <td colSpan={7} style={{ padding: 0, borderBottom: '1px solid ' + GRAY[6] }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', background: GRAY[6] }}>
-                          <thead><tr>
-                            <th style={{ ...thStyle, background: 'transparent', color: GRAY[2] }}>Médico</th>
-                            <th style={{ ...thStyle, background: 'transparent', color: GRAY[2], textAlign: 'right' }}>Repasse esperado</th>
-                            <th style={{ ...thStyle, background: 'transparent', color: GRAY[2] }}>Data no banco</th>
-                            <th style={{ ...thStyle, background: 'transparent', color: GRAY[2], textAlign: 'center' }}>Status</th>
-                          </tr></thead>
-                          <tbody>
-                            {r.medicosStatus.map((m, j) => (
-                              <tr key={j}>
-                                <td style={{ ...tdStyle, whiteSpace: 'normal' }}>{m.nome}</td>
-                                <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace' }}>R$ {brl(m.valor)}</td>
-                                <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{m.transacao ? fmtDt(m.transacao.data) : '—'}</td>
-                                <td style={{ ...tdStyle, textAlign: 'center' }}>
-                                  {m.pago
-                                    ? <span style={badge(G.g7, G.g2, G.g6)}>✓ Encontrado</span>
-                                    : <span style={badge('#FEF2F2', RED, '#FECACA')}>❌ Não encontrado</span>}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </td>
-                    </tr>
+          <div style={{ ...cardStyle, padding: '14px 20px', marginBottom: 16, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button style={btnGhost} onClick={reiniciar}>← Voltar</button>
+            <div style={{ flex: 1 }} />
+            <button style={{ ...btnPrimary, opacity: dandoBaixa || !selecionadas.size ? 0.6 : 1 }} onClick={darBaixa} disabled={dandoBaixa || !selecionadas.size}>
+              {dandoBaixa ? 'Processando…' : `✓ Dar baixa em ${selecionadas.size} nota(s)`}
+            </button>
+          </div>
+
+          <div style={{ ...cardStyle, overflow: 'hidden' }}>
+            <div style={{ padding: '14px 20px', borderBottom: '1px solid #D4E6DA', fontSize: 13, fontWeight: 600, color: GRAY[0] }}>
+              Notas identificadas no extrato ({cruzamento.length})
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 780 }}>
+                <thead><tr style={{ background: G.g1 }}>
+                  <th style={thStyle}></th>
+                  <th style={thStyle}>NF</th>
+                  <th style={thStyle}>Tomador</th>
+                  <th style={thStyle}>Competência</th>
+                  <th style={{ ...thStyle, textAlign: 'center' }}>Médicos pagos</th>
+                  <th style={{ ...thStyle, textAlign: 'center' }}>Status</th>
+                  <th style={{ ...thStyle, textAlign: 'center' }}></th>
+                </tr></thead>
+                <tbody>
+                  {cruzamento.map((r, i) => (
+                    <>
+                      <tr key={i} style={{ background: r.completo ? '#F0FDF4' : '#FFFBEB' }}>
+                        <td style={tdStyle}>
+                          {r.completo && <input type="checkbox" checked={selecionadas.has(i)} onChange={() => toggleSel(i)} />}
+                        </td>
+                        <td style={{ ...tdStyle, fontFamily: 'monospace', fontWeight: 600 }}>{r.nota.nf || '—'}</td>
+                        <td style={{ ...tdStyle, whiteSpace: 'normal', maxWidth: 220 }}>{r.nota.tomador || '—'}</td>
+                        <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{fmtMes(r.nota.comp)}</td>
+                        <td style={{ ...tdStyle, textAlign: 'center', fontFamily: 'monospace', fontWeight: 700 }}>{r.pagos}/{r.totalMedicos}</td>
+                        <td style={{ ...tdStyle, textAlign: 'center' }}>
+                          {r.completo
+                            ? <span style={badge(G.g7, G.g2, G.g6)}>✓ Completa</span>
+                            : <span style={badge('#FFFBEB', ORANGE, '#FDE68A')}>Parcial</span>}
+                        </td>
+                        <td style={{ ...tdStyle, textAlign: 'center' }}>
+                          <button onClick={() => setExpandida(expandida === i ? null : i)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: G.g3, fontSize: 12, fontWeight: 600 }}>
+                            {expandida === i ? 'Ocultar' : 'Ver médicos'}
+                          </button>
+                        </td>
+                      </tr>
+                      {expandida === i && (
+                        <tr>
+                          <td colSpan={7} style={{ padding: 0, borderBottom: '1px solid ' + GRAY[6] }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', background: GRAY[6] }}>
+                              <thead><tr>
+                                <th style={{ ...thStyle, background: 'transparent', color: GRAY[2] }}>Médico</th>
+                                <th style={{ ...thStyle, background: 'transparent', color: GRAY[2], textAlign: 'right' }}>Repasse esperado</th>
+                                <th style={{ ...thStyle, background: 'transparent', color: GRAY[2] }}>Data no banco</th>
+                                <th style={{ ...thStyle, background: 'transparent', color: GRAY[2], textAlign: 'center' }}>Status</th>
+                              </tr></thead>
+                              <tbody>
+                                {r.medicosStatus.map((m, j) => (
+                                  <tr key={j}>
+                                    <td style={{ ...tdStyle, whiteSpace: 'normal' }}>{m.nome}</td>
+                                    <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace' }}>R$ {brl(m.valor)}</td>
+                                    <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{m.transacao ? fmtDt(m.transacao.data) : '—'}</td>
+                                    <td style={{ ...tdStyle, textAlign: 'center' }}>
+                                      {m.pago
+                                        ? <span style={badge(G.g7, G.g2, G.g6)}>✓ Encontrado</span>
+                                        : <span style={badge('#FEF2F2', RED, '#FECACA')}>❌ Não encontrado</span>}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </td>
+                        </tr>
+                      )}
+                    </>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      ) : (
+        <>
+          <div style={{ ...cardStyle, padding: '18px 22px', marginBottom: 16, background: 'linear-gradient(135deg, #EBF5FF, #F0F9FF)', border: '1px solid #BFDBFE' }}>
+            <div style={{ fontSize: 13, color: GRAY[2], lineHeight: 1.5 }}>
+              Para cada médico: <strong>Valor esperado</strong> é a soma dos repasses de todas as notas fiscais dele no sistema (pagas ou não). <strong>Valor no extrato</strong> é a soma dos débitos do banco que bateram com algum desses valores. Se as duas colunas não baterem, use a lista de notas expandida pra achar qual NF específica está causando a diferença.
+            </div>
+          </div>
+
+          <div style={{ ...cardStyle, padding: '14px 20px', marginBottom: 16, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button style={btnGhost} onClick={reiniciar}>← Voltar</button>
+            <input type="text" placeholder="🔍 Buscar médico..." value={buscaMedico} onChange={e => setBuscaMedico(e.target.value)}
+              style={{ ...inputStyle, minWidth: 220 }} />
+            <div style={{ flex: 1 }} />
+            <span style={{ fontSize: 12, color: GRAY[3] }}>{medicosFiltrados.length} médico(s)</span>
+          </div>
+
+          <div style={{ ...cardStyle, overflow: 'hidden' }}>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 780 }}>
+                <thead><tr style={{ background: G.g1 }}>
+                  <th style={thStyle}>Médico</th>
+                  <th style={{ ...thStyle, textAlign: 'center' }}>Notas conferidas</th>
+                  <th style={{ ...thStyle, textAlign: 'right' }}>Valor esperado (sistema)</th>
+                  <th style={{ ...thStyle, textAlign: 'right' }}>Valor no extrato (banco)</th>
+                  <th style={{ ...thStyle, textAlign: 'right' }}>Diferença</th>
+                  <th style={{ ...thStyle, textAlign: 'center' }}></th>
+                </tr></thead>
+                <tbody>
+                  {medicosFiltrados.length === 0 && (
+                    <tr><td colSpan={6} style={{ ...tdStyle, textAlign: 'center', color: GRAY[3], padding: 30 }}>Nenhum médico encontrado.</td></tr>
                   )}
-                </>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+                  {medicosFiltrados.map((m, i) => {
+                    const completo = m.qtdEncontrada === m.qtdTotal
+                    return (
+                      <>
+                        <tr key={i} style={{ background: Math.abs(m.diferenca) < 0.01 ? '#F0FDF4' : '#FFFBEB' }}>
+                          <td style={{ ...tdStyle, fontWeight: 600, whiteSpace: 'normal' }}>{m.medico}</td>
+                          <td style={{ ...tdStyle, textAlign: 'center', fontFamily: 'monospace' }}>{m.qtdEncontrada}/{m.qtdTotal}</td>
+                          <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace' }}>R$ {brl(m.valorEsperadoTotal)}</td>
+                          <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: G.g2 }}>R$ {brl(m.valorEncontradoTotal)}</td>
+                          <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: Math.abs(m.diferenca) < 0.01 ? GRAY[3] : m.diferenca > 0 ? G.g2 : RED }}>
+                            {m.diferenca >= 0 ? '+' : '-'}R$ {brl(Math.abs(m.diferenca))}
+                          </td>
+                          <td style={{ ...tdStyle, textAlign: 'center' }}>
+                            <button onClick={() => setExpandidoMedico(expandidoMedico === i ? null : i)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: G.g3, fontSize: 12, fontWeight: 600 }}>
+                              {expandidoMedico === i ? 'Ocultar' : 'Ver notas'}
+                            </button>
+                          </td>
+                        </tr>
+                        {expandidoMedico === i && (
+                          <tr>
+                            <td colSpan={6} style={{ padding: 0, borderBottom: '1px solid ' + GRAY[6] }}>
+                              <table style={{ width: '100%', borderCollapse: 'collapse', background: GRAY[6] }}>
+                                <thead><tr>
+                                  <th style={{ ...thStyle, background: 'transparent', color: GRAY[2] }}>NF</th>
+                                  <th style={{ ...thStyle, background: 'transparent', color: GRAY[2] }}>Tomador</th>
+                                  <th style={{ ...thStyle, background: 'transparent', color: GRAY[2] }}>Competência</th>
+                                  <th style={{ ...thStyle, background: 'transparent', color: GRAY[2], textAlign: 'right' }}>Esperado</th>
+                                  <th style={{ ...thStyle, background: 'transparent', color: GRAY[2] }}>Data banco</th>
+                                  <th style={{ ...thStyle, background: 'transparent', color: GRAY[2], textAlign: 'center' }}>Status nota</th>
+                                  <th style={{ ...thStyle, background: 'transparent', color: GRAY[2], textAlign: 'center' }}>Match</th>
+                                </tr></thead>
+                                <tbody>
+                                  {m.notas.map((n, j) => (
+                                    <tr key={j}>
+                                      <td style={{ ...tdStyle, fontFamily: 'monospace', fontWeight: 600 }}>{n.nf || '—'}</td>
+                                      <td style={{ ...tdStyle, whiteSpace: 'normal' }}>{n.tomador || '—'}</td>
+                                      <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{fmtMes(n.comp)}</td>
+                                      <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace' }}>R$ {brl(n.valorEsperado)}</td>
+                                      <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{n.transacao ? fmtDt(n.transacao.data) : '—'}</td>
+                                      <td style={{ ...tdStyle, textAlign: 'center' }}>{n.statusNota || '—'}</td>
+                                      <td style={{ ...tdStyle, textAlign: 'center' }}>
+                                        {n.pago
+                                          ? <span style={badge(G.g7, G.g2, G.g6)}>✓</span>
+                                          : <span style={badge('#FEF2F2', RED, '#FECACA')}>❌</span>}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </td>
+                          </tr>
+                        )}
+                      </>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }
