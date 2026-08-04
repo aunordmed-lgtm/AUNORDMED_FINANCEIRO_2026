@@ -458,7 +458,8 @@ function AbaExtratoOFX({ notas = [], onRefresh }) {
 export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomadores = [], onRefresh }) {
   const [aba, setAba] = useState('caixa')
   const [fMedico, setFMedico] = useState('')
-  const [fComp, setFComp] = useState('')
+  const [fCompDe, setFCompDe] = useState('')
+  const [fCompAte, setFCompAte] = useState('')
   const [fTomador, setFTomador] = useState('')
   const [fStatus, setFStatus] = useState('')
 
@@ -483,7 +484,8 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
     const out = []
     notas.forEach(n => {
       if (fTomador && n.tomador !== fTomador) return
-      if (fComp && n.comp !== fComp) return
+      if (fCompDe && n.comp && n.comp < fCompDe) return
+      if (fCompAte && n.comp && n.comp > fCompAte) return
       if (fStatus && n.status !== fStatus) return
       ;(n.medicos_nota || []).forEach(mn => {
         if (fMedico && mn.nome !== fMedico) return
@@ -494,7 +496,7 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
       })
     })
     return out
-  }, [notas, fMedico, fComp, fTomador, fStatus])
+  }, [notas, fMedico, fCompDe, fCompAte, fTomador, fStatus])
 
   const totalBruto = linhas.reduce((a, l) => a + l.bruto, 0)
   const totalDevido = linhas.reduce((a, l) => a + l.repasse, 0)
@@ -516,7 +518,7 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
     return Object.values(m).sort((a, b) => a.medico.localeCompare(b.medico))
   }, [linhas])
 
-  function limparFiltros() { setFMedico(''); setFComp(''); setFTomador(''); setFStatus('') }
+  function limparFiltros() { setFMedico(''); setFCompDe(''); setFCompAte(''); setFTomador(''); setFStatus('') }
 
   function exportarCSV() {
     const headers = ['NF', 'Tomador', 'Competência', 'Médico', 'Bruto', 'Repasse (devido)', 'Status']
@@ -565,11 +567,12 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
                 </select>
               </div>
               <div>
-                <label style={labelStyle}>Competência</label>
-                <select style={inputStyle} value={fComp} onChange={e => setFComp(e.target.value)}>
-                  <option value="">Todas</option>
-                  {competenciasOpts.map(c => <option key={c} value={c}>{fmtMes(c)}</option>)}
-                </select>
+                <label style={labelStyle}>Competência de</label>
+                <input type="month" style={inputStyle} value={fCompDe} onChange={e => setFCompDe(e.target.value)} />
+              </div>
+              <div>
+                <label style={labelStyle}>Competência até</label>
+                <input type="month" style={inputStyle} value={fCompAte} onChange={e => setFCompAte(e.target.value)} />
               </div>
               <div>
                 <label style={labelStyle}>Tomador</label>
