@@ -460,6 +460,7 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
   const [fMedico, setFMedico] = useState('')
   const [fCompDe, setFCompDe] = useState('')
   const [fCompAte, setFCompAte] = useState('')
+  const [fDimensao, setFDimensao] = useState('emissao') // 'emissao' | 'recebimento'
   const [fTomador, setFTomador] = useState('')
   const [fStatus, setFStatus] = useState('')
 
@@ -468,11 +469,6 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
     notas.forEach(n => (n.medicos_nota || []).forEach(mn => mn.nome && s.add(mn.nome)))
     return [...s].sort()
   }, [medicos, notas])
-
-  const competenciasOpts = useMemo(() => {
-    const s = new Set(notas.map(n => n.comp).filter(Boolean))
-    return [...s].sort().reverse()
-  }, [notas])
 
   const tomadoresOpts = useMemo(() => {
     const s = new Set(tomadores.map(t => t.nome).filter(Boolean))
@@ -484,19 +480,23 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
     const out = []
     notas.forEach(n => {
       if (fTomador && n.tomador !== fTomador) return
-      if (fCompDe && n.comp && n.comp < fCompDe) return
-      if (fCompAte && n.comp && n.comp > fCompAte) return
+      // Usa a competência de emissão ou o mês de recebimento, conforme a dimensão escolhida.
+      // Se o mês de recebimento não estiver preenchido, cai de volta pra competência de emissão.
+      const mesRef = fDimensao === 'recebimento' ? (n.mes_recebimento || n.comp) : n.comp
+      if (fCompDe && mesRef && mesRef < fCompDe) return
+      if (fCompAte && mesRef && mesRef > fCompAte) return
       if (fStatus && n.status !== fStatus) return
       ;(n.medicos_nota || []).forEach(mn => {
         if (fMedico && mn.nome !== fMedico) return
         out.push({
-          nf: n.nf, tomador: n.tomador, comp: n.comp, status: n.status,
+          nf: n.nf, tomador: n.tomador, comp: n.comp, mesRecebimento: n.mes_recebimento, status: n.status,
           medico: mn.nome, bruto: mn.valor_bruto_medico || 0, repasse: mn.repasse || 0,
         })
       })
     })
     return out
-  }, [notas, fMedico, fCompDe, fCompAte, fTomador, fStatus])
+  }, [notas, fMedico, fCompDe, fCompAte, fDimensao, fTomador, fStatus])
+
 
   const totalBruto = linhas.reduce((a, l) => a + l.bruto, 0)
   const totalDevido = linhas.reduce((a, l) => a + l.repasse, 0)
@@ -518,11 +518,11 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
     return Object.values(m).sort((a, b) => a.medico.localeCompare(b.medico))
   }, [linhas])
 
-  function limparFiltros() { setFMedico(''); setFCompDe(''); setFCompAte(''); setFTomador(''); setFStatus('') }
+  function limparFiltros() { setFMedico(''); setFCompDe(''); setFCompAte(''); setFDimensao('emissao'); setFTomador(''); setFStatus('') }
 
   function exportarCSV() {
-    const headers = ['NF', 'Tomador', 'Competência', 'Médico', 'Bruto', 'Repasse (devido)', 'Status']
-    const rows = linhas.map(l => [l.nf, l.tomador, fmtMes(l.comp), l.medico, l.bruto.toFixed(2).replace('.', ','), l.repasse.toFixed(2).replace('.', ','), l.status])
+    const headers = ['NF', 'Tomador', 'Competência (emissão)', 'Mês recebimento', 'Médico', 'Bruto', 'Repasse (devido)', 'Status']
+    const rows = linhas.map(l => [l.nf, l.tomador, fmtMes(l.comp), l.mesRecebimento ? fmtMes(l.mesRecebimento) : '', l.medico, l.bruto.toFixed(2).replace('.', ','), l.repasse.toFixed(2).replace('.', ','), l.status])
     const csv = [headers, ...rows].map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(';')).join('\n')
     const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
@@ -567,11 +567,18 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
                 </select>
               </div>
               <div>
-                <label style={labelStyle}>Competência de</label>
+                <label style={labelStyle}>Filtrar período por</label>
+                <select style={inputStyle} value={fDimensao} onChange={e => setFDimensao(e.target.value)}>
+                  <option value="emissao">Competência de emissão</option>
+                  <option value="recebimento">Mês de recebimento</option>
+                </select>
+              </div>
+              <div>
+                <label style={labelStyle}>De</label>
                 <input type="month" style={inputStyle} value={fCompDe} onChange={e => setFCompDe(e.target.value)} />
               </div>
               <div>
-                <label style={labelStyle}>Competência até</label>
+                <label style={labelStyle}>Até</label>
                 <input type="month" style={inputStyle} value={fCompAte} onChange={e => setFCompAte(e.target.value)} />
               </div>
               <div>
@@ -652,6 +659,7 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
                     <th style={thStyle}>NF</th>
                     <th style={thStyle}>Tomador</th>
                     <th style={thStyle}>Competência</th>
+                    <th style={thStyle}>Receb.</th>
                     <th style={thStyle}>Médico</th>
                     <th style={{ ...thStyle, textAlign: 'right' }}>Bruto</th>
                     <th style={{ ...thStyle, textAlign: 'right' }}>Repasse</th>
@@ -659,13 +667,16 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
                   </tr></thead>
                   <tbody>
                     {linhas.length === 0 && (
-                      <tr><td colSpan={7} style={{ ...tdStyle, textAlign: 'center', color: GRAY[3], padding: 30 }}>Nenhuma nota encontrada para os filtros selecionados.</td></tr>
+                      <tr><td colSpan={8} style={{ ...tdStyle, textAlign: 'center', color: GRAY[3], padding: 30 }}>Nenhuma nota encontrada para os filtros selecionados.</td></tr>
                     )}
                     {linhas.map((l, i) => (
                       <tr key={i}>
                         <td style={{ ...tdStyle, fontFamily: 'monospace', fontWeight: 600 }}>{l.nf || '—'}</td>
                         <td style={{ ...tdStyle, whiteSpace: 'normal' }}>{l.tomador || '—'}</td>
                         <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{fmtMes(l.comp)}</td>
+                        <td style={{ ...tdStyle, fontFamily: 'monospace', color: l.mesRecebimento && l.mesRecebimento !== l.comp ? ORANGE : GRAY[3], fontWeight: l.mesRecebimento && l.mesRecebimento !== l.comp ? 700 : 400 }}>
+                          {l.mesRecebimento ? fmtMes(l.mesRecebimento) : '—'}
+                        </td>
                         <td style={{ ...tdStyle, whiteSpace: 'normal' }}>{l.medico}</td>
                         <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace' }}>R$ {brl(l.bruto)}</td>
                         <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace', fontWeight: 600, color: G.g2 }}>R$ {brl(l.repasse)}</td>
