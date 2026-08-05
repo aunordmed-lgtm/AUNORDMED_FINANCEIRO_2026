@@ -7,7 +7,7 @@ import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, R
 
 const MESES_LABEL = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez']
 
-export function Comprovantes({ comprovantes=[], medicos, notas=[], onRefresh }) {
+export function Comprovantes({ comprovantes=[], medicos, notas=[], extratoBancario=[], onRefresh }) {
   const { toast } = useToast()
   const [aba, setAba] = useState('comprovantes') // comprovantes | faturamento
   const [busca, setBusca] = useState('')
@@ -65,12 +65,22 @@ export function Comprovantes({ comprovantes=[], medicos, notas=[], onRefresh }) 
     // Top tomadores
     const topTomadores = Object.values(porTomador).sort((a,b) => b.bruto - a.bruto).slice(0, 6)
 
+    // ── Recebido REAL, segundo o extrato bancário confirmado (fonte confiável) ──
+    const extratoDoMedico = extratoBancario.filter(e => e.medico_nome === medicoFat)
+    const totalRecebidoReal = extratoDoMedico.reduce((a, e) => a + (e.valor || 0), 0)
+    const porMesComReal = mesesOrdenados.map(m => {
+      const recebidoReal = extratoDoMedico
+        .filter(e => e.data && String(e.data).slice(0, 7) === m.comp)
+        .reduce((a, e) => a + (e.valor || 0), 0)
+      return { ...m, recebidoReal }
+    })
+
     return {
-      porMes: mesesOrdenados,
-      totais: { bruto: totalBruto, repasse: totalRepasse, count: countNotas },
+      porMes: porMesComReal,
+      totais: { bruto: totalBruto, repasse: totalRepasse, count: countNotas, recebidoReal: totalRecebidoReal, qtdTransacoesReal: extratoDoMedico.length },
       porTomador: topTomadores
     }
-  }, [notas, medicoFat])
+  }, [notas, medicoFat, extratoBancario])
 
   const medCadastrado = medicos.find(m => m.nome === medicoFat)
 
@@ -210,10 +220,11 @@ export function Comprovantes({ comprovantes=[], medicos, notas=[], onRefresh }) 
           ) : (
             <>
               {/* KPIs */}
-              <div className="kpi-grid" style={{ gridTemplateColumns:'repeat(4,1fr)', marginBottom:14 }}>
+              <div className="kpi-grid" style={{ gridTemplateColumns:'repeat(5,1fr)', marginBottom:14 }}>
                 {[
                   { bar:'var(--g5)', ic:'var(--g10)', icon:'💰', label:'Total bruto', value: brl(dadosFaturamento.totais.bruto), sub:'Acumulado' },
-                  { bar:'var(--blue)', ic:'var(--blue-l)', icon:'📥', label:'Total repasse', value: brl(dadosFaturamento.totais.repasse), sub:`Após ${medCadastrado?.retencao||13}% retenção` },
+                  { bar:'var(--blue)', ic:'var(--blue-l)', icon:'📥', label:'Total repasse (devido)', value: brl(dadosFaturamento.totais.repasse), sub:`Após ${medCadastrado?.retencao||13}% retenção` },
+                  { bar:'#16A34A', ic:'#F0FDF4', icon:'✅', label:'Recebido real', value: brl(dadosFaturamento.totais.recebidoReal), sub:`${dadosFaturamento.totais.qtdTransacoesReal} transação(ões) confirmada(s)` },
                   { bar:'var(--orange)', ic:'var(--orange-l)', icon:'📄', label:'NFs vinculadas', value: dadosFaturamento.totais.count, sub:'Total de notas' },
                   { bar:'var(--g5)', ic:'var(--g10)', icon:'📊', label:'Meses ativos', value: dadosFaturamento.porMes.length, sub:'Com faturamento' },
                 ].map((k,i) => (
@@ -297,25 +308,35 @@ export function Comprovantes({ comprovantes=[], medicos, notas=[], onRefresh }) 
                           <th>Competência</th>
                           <th style={{textAlign:'right'}}>NFs</th>
                           <th style={{textAlign:'right'}}>Bruto</th>
-                          <th style={{textAlign:'right'}}>Repasse</th>
-                          <th style={{textAlign:'right'}}>Retenção</th>
+                          <th style={{textAlign:'right'}}>Repasse (devido)</th>
+                          <th style={{textAlign:'right'}}>Recebido real</th>
+                          <th style={{textAlign:'right'}}>Diferença</th>
                         </tr></thead>
                         <tbody>
-                          {dadosFaturamento.porMes.map((m,i) => (
-                            <tr key={m.comp} style={{ background: i%2===0?'#fff':'var(--n10)' }}>
-                              <td style={{ fontWeight:600 }}>{m.label}</td>
-                              <td className="mono" style={{ textAlign:'right' }}>{m.count}</td>
-                              <td className="mono" style={{ textAlign:'right', fontWeight:600 }}>{brl(m.bruto)}</td>
-                              <td className="mono" style={{ textAlign:'right', color:'var(--g3)', fontWeight:700 }}>{brl(m.repasse)}</td>
-                              <td className="mono" style={{ textAlign:'right', color:'var(--n4)' }}>{brl(m.bruto - m.repasse)}</td>
-                            </tr>
-                          ))}
+                          {dadosFaturamento.porMes.map((m,i) => {
+                            const diff = m.recebidoReal - m.repasse
+                            return (
+                              <tr key={m.comp} style={{ background: i%2===0?'#fff':'var(--n10)' }}>
+                                <td style={{ fontWeight:600 }}>{m.label}</td>
+                                <td className="mono" style={{ textAlign:'right' }}>{m.count}</td>
+                                <td className="mono" style={{ textAlign:'right', fontWeight:600 }}>{brl(m.bruto)}</td>
+                                <td className="mono" style={{ textAlign:'right', color:'var(--g3)', fontWeight:700 }}>{brl(m.repasse)}</td>
+                                <td className="mono" style={{ textAlign:'right', color:'#16A34A', fontWeight:700 }}>{brl(m.recebidoReal)}</td>
+                                <td className="mono" style={{ textAlign:'right', fontWeight:600, color: Math.abs(diff) < 0.01 ? 'var(--n4)' : diff < 0 ? 'var(--red, #DC2626)' : 'var(--g3)' }}>
+                                  {diff >= 0 ? '+' : '-'}{brl(Math.abs(diff))}
+                                </td>
+                              </tr>
+                            )
+                          })}
                           <tr style={{ background:'var(--g1)' }}>
                             <td style={{ fontWeight:700, color:'#fff' }}>TOTAL</td>
                             <td className="mono" style={{ textAlign:'right', fontWeight:700, color:'rgba(255,255,255,.85)' }}>{dadosFaturamento.totais.count}</td>
                             <td className="mono" style={{ textAlign:'right', fontWeight:700, color:'rgba(255,255,255,.85)' }}>{brl(dadosFaturamento.totais.bruto)}</td>
                             <td className="mono" style={{ textAlign:'right', fontWeight:700, color:'var(--g7)' }}>{brl(dadosFaturamento.totais.repasse)}</td>
-                            <td className="mono" style={{ textAlign:'right', fontWeight:700, color:'rgba(255,255,255,.7)' }}>{brl(dadosFaturamento.totais.bruto - dadosFaturamento.totais.repasse)}</td>
+                            <td className="mono" style={{ textAlign:'right', fontWeight:700, color:'#4ADE80' }}>{brl(dadosFaturamento.totais.recebidoReal)}</td>
+                            <td className="mono" style={{ textAlign:'right', fontWeight:700, color:'rgba(255,255,255,.7)' }}>
+                              {(dadosFaturamento.totais.recebidoReal - dadosFaturamento.totais.repasse) >= 0 ? '+' : '-'}{brl(Math.abs(dadosFaturamento.totais.recebidoReal - dadosFaturamento.totais.repasse))}
+                            </td>
                           </tr>
                         </tbody>
                       </table>
