@@ -145,6 +145,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
   const [fltStatus, setFltStatus] = useState('')
   const [fltComp, setFltComp] = useState('')
   const [fltTomador, setFltTomador] = useState('')
+  const [fltMedico, setFltMedico] = useState('')
   const [sortKey, setSortKey] = useState('criado_em')
   const [sortDir, setSortDir] = useState('desc')
   const [medSel, setMedSel] = useState([])
@@ -185,6 +186,11 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
   const medicosOrdenados = useMemo(() => [...medicos].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')), [medicos])
   const comps = useMemo(() => [...new Set(notas.map(n => n.comp).filter(Boolean))].sort(), [notas])
   const tomadoresLista = useMemo(() => [...new Set(notas.map(n => n.tomador).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR')), [notas])
+  const medicosDasNotas = useMemo(() => {
+    const s = new Set()
+    notas.forEach(n => (n.medicos_nota || []).forEach(mn => mn.nome && s.add(mn.nome)))
+    return [...s].sort((a, b) => a.localeCompare(b, 'pt-BR'))
+  }, [notas])
 
   function toggleSort(key) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -202,7 +208,8 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
         ? !!(n.mes_recebimento && n.mes_recebimento !== n.comp)
         : (!fltStatus || n.status === fltStatus)) &&
       (!fltComp || n.comp === fltComp) &&
-      (!fltTomador || n.tomador === fltTomador)
+      (!fltTomador || n.tomador === fltTomador) &&
+      (!fltMedico || (n.medicos_nota || []).some(mn => mn.nome === fltMedico))
     )
     f = [...f].sort((a, b) => {
       let va = a[sortKey], vb = b[sortKey]
@@ -220,7 +227,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
       return sortDir === 'asc' ? va - vb : vb - va
     })
     return f
-  }, [notas, busca, fltStatus, fltComp, fltTomador, sortKey, sortDir])
+  }, [notas, busca, fltStatus, fltComp, fltTomador, fltMedico, sortKey, sortDir])
 
   const notasRel = useMemo(() => {
     if (relTipo === 'todos') return notas
@@ -614,6 +621,10 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
             <select className="filter-select" value={fltTomador} onChange={e => setFltTomador(e.target.value)}>
               <option value="">Todos tomadores</option>
               {tomadoresLista.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <select className="filter-select" value={fltMedico} onChange={e => setFltMedico(e.target.value)}>
+              <option value="">Todos médicos</option>
+              {medicosDasNotas.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
           </div>
           <div className="table-wrap">
