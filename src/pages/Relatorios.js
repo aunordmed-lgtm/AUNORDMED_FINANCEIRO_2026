@@ -1,12 +1,37 @@
 import { useState, useMemo } from 'react'
 import * as XLSX from 'xlsx'
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { brl, pct, fmtMes } from '../lib/helpers'
 
-export function Relatorios({ notas, medicos }) {
+const G = { g1: '#0D3D20', g2: '#145C30', g3: '#1A7A3E', g6: '#A8DCBA', g7: '#E8F5ED' }
+const GRAY = { 0: '#0F172A', 1: '#1E293B', 2: '#475569', 3: '#94A3B8', 5: '#E2E8F0', 6: '#F1F5F9' }
+const RED = '#DC2626'
+const BLUE = '#1A56DB'
+
+const cardStyle = { background: '#fff', border: '1px solid #D4E6DA', borderRadius: 14, boxShadow: '0 1px 3px rgba(0,0,0,.06)' }
+const inputStyle = { border: '1.5px solid ' + GRAY[5], borderRadius: 10, padding: '0 12px', fontSize: 13, color: GRAY[0], background: GRAY[6], height: 38 }
+const labelStyle = { fontSize: 10, fontWeight: 700, color: GRAY[2], textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 5, display: 'block' }
+const thStyle = { padding: '10px 14px', textAlign: 'left', fontSize: 9, fontWeight: 700, color: G.g6, textTransform: 'uppercase', letterSpacing: '.5px', whiteSpace: 'nowrap' }
+const tdStyle = { padding: '10px 14px', borderBottom: '1px solid ' + GRAY[6], fontSize: 12.5 }
+const btnGhost = { height: 38, padding: '0 16px', borderRadius: 10, border: '1px solid #D4E6DA', background: GRAY[6], color: GRAY[1], fontSize: 13, fontWeight: 600, cursor: 'pointer' }
+
+function Kpi({ label, value, sub, color }) {
+  return (
+    <div style={{ ...cardStyle, padding: '16px 18px' }}>
+      <div style={labelStyle}>{label}</div>
+      <div style={{ fontSize: 21, fontWeight: 700, fontFamily: 'monospace', color: color || GRAY[0] }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: GRAY[3], marginTop: 4 }}>{sub}</div>}
+    </div>
+  )
+}
+
+export function Relatorios({ notas, medicos, extratoBancario = [] }) {
   const [tipo, setTipo] = useState('mes')
   const [mes, setMes] = useState(new Date().toISOString().substring(0, 7))
   const [de, setDe] = useState('')
   const [ate, setAte] = useState('')
+  const [busca, setBusca] = useState('')
+  const [ordenarPor, setOrdenarPor] = useState('recebido') // 'recebido' | 'bruto' | 'nome'
 
   const notasFiltradas = useMemo(() => {
     if (tipo === 'todos') return notas
@@ -19,6 +44,20 @@ export function Relatorios({ notas, medicos }) {
     })
   }, [notas, tipo, mes, de, ate])
 
+  // Extrato filtrado pelo mesmo período (usa a data real da transação bancária)
+  const extratoFiltrado = useMemo(() => {
+    return extratoBancario.filter(e => {
+      const mesTx = e.data ? String(e.data).slice(0, 7) : ''
+      if (tipo === 'mes') return mes ? mesTx === mes : true
+      if (tipo === 'intervalo') {
+        if (de && mesTx && mesTx < de) return false
+        if (ate && mesTx && mesTx > ate) return false
+        return true
+      }
+      return true
+    })
+  }, [extratoBancario, tipo, mes, de, ate])
+
   const periodo = tipo === 'todos' ? '(todos os períodos)' : tipo === 'mes' ? `em ${fmtMes(mes)}` : de && ate ? `de ${fmtMes(de)} até ${fmtMes(ate)}` : ''
 
   const faturaram = useMemo(() => {
@@ -29,117 +68,183 @@ export function Relatorios({ notas, medicos }) {
 
   const naoFaturaram = useMemo(() => medicos.filter(m => !faturaram.has(m.nome)), [medicos, faturaram])
 
-  const totais = useMemo(() => notasFiltradas.reduce((a, n) => ({
-    bruto: a.bruto + (n.bruto || 0),
-    recebido: a.recebido + (n.recebido || 0),
-    margem: a.margem + (n.margem || 0),
-  }), { bruto: 0, recebido: 0, margem: 0 }), [notasFiltradas])
+  const totais = useMemo(() => {
+    const base = notasFiltradas.reduce((a, n) => ({
+      bruto: a.bruto + (n.bruto || 0),
+      recebido: a.recebido + (n.recebido || 0),
+      margem: a.margem + (n.margem || 0),
+    }), { bruto: 0, recebido: 0, margem: 0 })
+    const recebidoReal = extratoFiltrado.reduce((a, e) => a + (e.valor || 0), 0)
+    return { ...base, recebidoReal }
+  }, [notasFiltradas, extratoFiltrado])
 
-  const getStatsMed = (nome) => {
-    const nfs = notasFiltradas.filter(n => n.medicos_nota?.some(mn => mn.nome === nome))
-    const tot = nfs.reduce((a, n) => { const mn = n.medicos_nota?.find(mn => mn.nome === nome); return a + (mn?.valor_bruto_medico || 0) }, 0)
-    const rep = nfs.reduce((a, n) => { const mn = n.medicos_nota?.find(mn => mn.nome === nome); return a + (mn?.repasse || 0) }, 0)
-    return { count: nfs.length, tot, rep }
-  }
+  // Dados por médico: bruto/repasse esperado (das notas) + recebido real (do extrato)
+  const porMedico = useMemo(() => {
+    const m = {}
+    notasFiltradas.forEach(n => {
+      n.medicos_nota?.forEach(mn => {
+        if (!m[mn.nome]) m[mn.nome] = { nome: mn.nome, count: 0, bruto: 0, repasse: 0, recebidoReal: 0, qtdTransacoes: 0 }
+        m[mn.nome].count++
+        m[mn.nome].bruto += mn.valor_bruto_medico || 0
+        m[mn.nome].repasse += mn.repasse || 0
+      })
+    })
+    extratoFiltrado.forEach(e => {
+      if (!e.medico_nome) return
+      if (!m[e.medico_nome]) m[e.medico_nome] = { nome: e.medico_nome, count: 0, bruto: 0, repasse: 0, recebidoReal: 0, qtdTransacoes: 0 }
+      m[e.medico_nome].recebidoReal += e.valor || 0
+      m[e.medico_nome].qtdTransacoes++
+    })
+    let arr = Object.values(m).filter(x => !busca || x.nome.toLowerCase().includes(busca.toLowerCase()))
+    arr.sort((a, b) => {
+      if (ordenarPor === 'nome') return a.nome.localeCompare(b.nome, 'pt-BR')
+      if (ordenarPor === 'bruto') return b.bruto - a.bruto
+      return b.recebidoReal - a.recebidoReal
+    })
+    return arr
+  }, [notasFiltradas, extratoFiltrado, busca, ordenarPor])
+
+  const top10Chart = useMemo(() =>
+    [...porMedico].sort((a, b) => b.recebidoReal - a.recebidoReal).slice(0, 10)
+      .map(m => ({ nome: m.nome.split(' ').slice(0, 2).join(' '), recebido: m.recebidoReal }))
+  , [porMedico])
 
   const exportar = () => {
-    const rows = [['Médico', 'CRM', 'Qtd NFs', 'Total bruto', 'Total repasse', 'Período']]
-    ;[...faturaram].forEach(nome => {
-      const m = medicos.find(x => x.nome === nome)
-      const s = getStatsMed(nome)
-      rows.push([nome, m?.crm || '', s.count, +s.tot.toFixed(2), +s.rep.toFixed(2), periodo])
+    const rows = [['Médico', 'CRM', 'Qtd NFs', 'Total bruto', 'Total repasse (devido)', 'Recebido real', 'Diferença', 'Período']]
+    porMedico.forEach(m => {
+      const cad = medicos.find(x => x.nome === m.nome)
+      rows.push([m.nome, cad?.crm || '', m.count, +m.bruto.toFixed(2), +m.repasse.toFixed(2), +m.recebidoReal.toFixed(2), +(m.recebidoReal - m.repasse).toFixed(2), periodo])
     })
     const ws = XLSX.utils.aoa_to_sheet(rows)
     const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, 'Relatório')
-    XLSX.writeFile(wb, 'relatorio_aunordmed.xlsx')
+    XLSX.utils.book_append_sheet(wb, ws, 'Por médico')
+    XLSX.writeFile(wb, 'faturamento_por_medico.xlsx')
   }
 
   return (
-    <div className="page-content">
-      {/* Filtros */}
-      <div className="card" style={{ marginBottom: 14 }}>
-        <div className="card-body">
-          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-            <div className="field">
-              <label>Tipo de período</label>
-              <select style={{ height: 36, fontSize: 13, width: 160 }} value={tipo} onChange={e => setTipo(e.target.value)}>
-                <option value="mes">Mês específico</option>
-                <option value="intervalo">Intervalo</option>
-                <option value="todos">Todos os períodos</option>
-              </select>
+    <div style={{ height: '100%', overflowY: 'auto', overflowX: 'hidden' }}>
+      <div style={{ padding: 24, maxWidth: 1200, margin: '0 auto' }}>
+
+        <div style={{ background: `linear-gradient(135deg, ${G.g1} 0%, ${G.g3} 100%)`, borderRadius: 20, padding: '24px 28px', marginBottom: 16 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: '#fff' }}>📈 Faturamento por médico</div>
+          <div style={{ fontSize: 12, color: 'rgba(255,255,255,.55)', marginTop: 4, maxWidth: 640, lineHeight: 1.5 }}>
+            Quanto cada médico faturou nas notas (bruto/repasse esperado) e quanto <strong>realmente recebeu</strong>, segundo o extrato bancário confirmado.
+          </div>
+        </div>
+
+        <div style={{ ...cardStyle, padding: '16px 20px', marginBottom: 16, display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <div>
+            <label style={labelStyle}>Período</label>
+            <select style={inputStyle} value={tipo} onChange={e => setTipo(e.target.value)}>
+              <option value="mes">Mês específico</option>
+              <option value="intervalo">Intervalo</option>
+              <option value="todos">Todos os períodos</option>
+            </select>
+          </div>
+          {tipo === 'mes' && (
+            <div><label style={labelStyle}>Mês/Ano</label><input type="month" style={inputStyle} value={mes} onChange={e => setMes(e.target.value)} /></div>
+          )}
+          {tipo === 'intervalo' && (<>
+            <div><label style={labelStyle}>De</label><input type="month" style={inputStyle} value={de} onChange={e => setDe(e.target.value)} /></div>
+            <div><label style={labelStyle}>Até</label><input type="month" style={inputStyle} value={ate} onChange={e => setAte(e.target.value)} /></div>
+          </>)}
+          <div>
+            <label style={labelStyle}>Buscar médico</label>
+            <input type="text" style={{ ...inputStyle, width: 200 }} value={busca} onChange={e => setBusca(e.target.value)} placeholder="Nome..." />
+          </div>
+          <div>
+            <label style={labelStyle}>Ordenar por</label>
+            <select style={inputStyle} value={ordenarPor} onChange={e => setOrdenarPor(e.target.value)}>
+              <option value="recebido">Recebido real</option>
+              <option value="bruto">Valor bruto</option>
+              <option value="nome">Nome (A-Z)</option>
+            </select>
+          </div>
+          <div style={{ flex: 1 }} />
+          <button onClick={exportar} style={btnGhost}>⬇ Exportar Excel</button>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
+          <Kpi label="Total emitido" value={brl(totais.bruto)} sub={`${notasFiltradas.length} nota(s)`} />
+          <Kpi label="Total devido (repasse)" value={brl(porMedico.reduce((a, m) => a + m.repasse, 0))} sub="segundo as notas" color={BLUE} />
+          <Kpi label="Recebido real" value={brl(totais.recebidoReal)} sub="segundo extrato bancário" color={G.g2} />
+          <Kpi label="Médicos ativos" value={faturaram.size} sub={`de ${medicos.length} cadastrados`} />
+        </div>
+
+        {top10Chart.length > 0 && (
+          <div style={{ ...cardStyle, padding: '16px 20px', marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: GRAY[0], marginBottom: 12 }}>🏆 Top 10 — recebido real {periodo}</div>
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={top10Chart} layout="vertical" margin={{ top: 4, right: 24, bottom: 4, left: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" horizontal={false} />
+                <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={v => 'R$' + (v / 1000).toFixed(0) + 'k'} />
+                <YAxis type="category" dataKey="nome" tick={{ fontSize: 11 }} width={140} />
+                <Tooltip formatter={v => brl(v)} />
+                <Bar dataKey="recebido" radius={[0, 4, 4, 0]}>
+                  {top10Chart.map((_, i) => <Cell key={i} fill={i === 0 ? G.g2 : G.g3} />)}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+
+        <div style={{ ...cardStyle, overflow: 'hidden', marginBottom: 16 }}>
+          <div style={{ padding: '14px 20px', borderBottom: '1px solid #D4E6DA', fontSize: 13, fontWeight: 600, color: GRAY[0] }}>
+            Detalhamento por médico ({porMedico.length})
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
+              <thead><tr style={{ background: G.g1 }}>
+                <th style={thStyle}>Médico</th>
+                <th style={{ ...thStyle, textAlign: 'center' }}>NFs</th>
+                <th style={{ ...thStyle, textAlign: 'right' }}>Bruto</th>
+                <th style={{ ...thStyle, textAlign: 'right' }}>Repasse (devido)</th>
+                <th style={{ ...thStyle, textAlign: 'right' }}>Recebido real</th>
+                <th style={{ ...thStyle, textAlign: 'right' }}>Diferença</th>
+              </tr></thead>
+              <tbody>
+                {porMedico.length === 0 && (
+                  <tr><td colSpan={6} style={{ ...tdStyle, textAlign: 'center', color: GRAY[3], padding: 30 }}>Nenhum médico faturou {periodo}.</td></tr>
+                )}
+                {porMedico.map((m, i) => {
+                  const dif = m.recebidoReal - m.repasse
+                  const cad = medicos.find(x => x.nome === m.nome)
+                  return (
+                    <tr key={i}>
+                      <td style={{ ...tdStyle, fontWeight: 600 }}>
+                        {m.nome}
+                        {cad?.crm && <div style={{ fontSize: 10, color: GRAY[3], fontWeight: 400 }}>{cad.crm}</div>}
+                      </td>
+                      <td style={{ ...tdStyle, textAlign: 'center', fontFamily: 'monospace' }}>{m.count}</td>
+                      <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace' }}>{brl(m.bruto)}</td>
+                      <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace', color: BLUE }}>{brl(m.repasse)}</td>
+                      <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: G.g2 }}>{brl(m.recebidoReal)}</td>
+                      <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: Math.abs(dif) < 0.01 ? GRAY[3] : dif < 0 ? RED : G.g2 }}>
+                        {dif >= 0 ? '+' : '-'}{brl(Math.abs(dif))}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {naoFaturaram.length > 0 && (
+          <div style={{ ...cardStyle, overflow: 'hidden' }}>
+            <div style={{ padding: '14px 20px', borderBottom: '1px solid #D4E6DA', fontSize: 13, fontWeight: 600, color: GRAY[0] }}>
+              ❌ Não faturaram {periodo} ({naoFaturaram.length})
             </div>
-            {tipo === 'mes' && (
-              <div className="field"><label>Mês/Ano</label><input type="month" style={{ height: 36, width: 150 }} value={mes} onChange={e => setMes(e.target.value)} /></div>
-            )}
-            {tipo === 'intervalo' && (<>
-              <div className="field"><label>De</label><input type="month" style={{ height: 36, width: 140 }} value={de} onChange={e => setDe(e.target.value)} /></div>
-              <div className="field"><label>Até</label><input type="month" style={{ height: 36, width: 140 }} value={ate} onChange={e => setAte(e.target.value)} /></div>
-            </>)}
-            <button className="btn btn-ghost btn-sm" onClick={exportar}>⬇ Exportar Excel</button>
-          </div>
-        </div>
-      </div>
-
-      {/* KPIs */}
-      <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4,1fr)', marginBottom: 14 }}>
-        {[
-          { bar:'var(--g2)', ic:'var(--g7)', icon:'💰', label:'Total emitido', value:brl(totais.bruto), sub:`${notasFiltradas.length} nota(s)` },
-          { bar:'var(--blue)', ic:'var(--blue-l)', icon:'📥', label:'Total recebido', value:brl(totais.recebido), sub:'Após impostos' },
-          { bar:'var(--g4)', ic:'var(--g8)', icon:'📈', label:'Margem empresa', value:brl(totais.margem), sub:totais.recebido>0?pct(totais.margem/totais.recebido):'-' },
-          { bar:'var(--orange)', ic:'var(--orange-l)', icon:'👨‍⚕️', label:'Médicos ativos', value:faturaram.size, sub:`de ${medicos.length} cadastrados` },
-        ].map((k,i) => (
-          <div key={i} className="kpi">
-            <div className="kpi-bar" style={{ background: k.bar }} />
-            <div className="kpi-icon" style={{ background: k.ic }}>{k.icon}</div>
-            <div className="kpi-label">{k.label}</div>
-            <div className="kpi-value">{k.value}</div>
-            <div className="kpi-sub">{k.sub}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* Tabelas */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-        <div className="card">
-          <div className="card-header" style={{ background:'var(--g7)', borderLeft:'4px solid var(--g3)' }}>
-            <h3>✅ Faturaram {periodo} ({faturaram.size})</h3>
-          </div>
-          {faturaram.size === 0 ? (
-            <div className="empty-state" style={{ padding: '1.5rem' }}><p>Nenhum neste período</p></div>
-          ) : [...faturaram].map(nome => {
-            const m = medicos.find(x => x.nome === nome)
-            const s = getStatsMed(nome)
-            return (
-              <div key={nome} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 14px', borderBottom:'1px solid var(--gray6)', fontSize:12 }}>
-                <div>
-                  <div style={{ fontWeight:500, color:'var(--g2)' }}>{nome}</div>
-                  <div style={{ fontSize:10, color:'var(--gray3)' }}>{m?.crm||''}{m?.especialidade?` · ${m.especialidade}`:''}</div>
+            <div style={{ padding: '8px 20px' }}>
+              {naoFaturaram.map(m => (
+                <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid ' + GRAY[6], fontSize: 12.5 }}>
+                  <span style={{ fontWeight: 500, color: RED }}>{m.nome}</span>
+                  <span style={{ fontSize: 11, color: GRAY[3] }}>{m.crm || ''}</span>
                 </div>
-                <div style={{ textAlign:'right' }}>
-                  <div className="mono" style={{ fontWeight:700 }}>{brl(s.tot)}</div>
-                  <div style={{ fontSize:10, color:'var(--gray3)' }}>{s.count} NF(s) · Repasse: {brl(s.rep)}</div>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-
-        <div className="card">
-          <div className="card-header" style={{ background:'var(--red-l)', borderLeft:'4px solid var(--red)' }}>
-            <h3>❌ Não faturaram {periodo} ({naoFaturaram.length})</h3>
-          </div>
-          {naoFaturaram.length === 0 ? (
-            <div className="empty-state" style={{ padding:'1.5rem' }}><div className="empty-icon">🎉</div><h4>Todos faturaram!</h4></div>
-          ) : naoFaturaram.map(m => (
-            <div key={m.id} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 14px', borderBottom:'1px solid var(--gray6)', fontSize:12 }}>
-              <div>
-                <div style={{ fontWeight:500, color:'var(--red-d)' }}>{m.nome}</div>
-                <div style={{ fontSize:10, color:'var(--gray3)' }}>{m.crm||''}</div>
-              </div>
+              ))}
             </div>
-          ))}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   )
