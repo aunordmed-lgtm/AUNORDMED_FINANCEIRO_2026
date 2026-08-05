@@ -9,8 +9,6 @@ const navItems = [
   { path: '/gargalos', icon: '⚠️', label: 'Gargalos & Prejuízo', badge: 'gargalo', badgeColor: 'orange' },
   { path: '/notas', icon: '📄', label: 'Notas fiscais', badge: 'nf', badgeColor: 'ok' },
   { path: '/importacao', icon: '📥', label: 'Importar NFs' },
-  { path: '/extrato', icon: '🏦', label: 'Extrato OFX' },
-  { path: '/importar-extrato', icon: '📤', label: 'Importar extrato (CSV)' },
   { path: '/conferencia-pdf', icon: '📋', label: 'Conferência PDF' },
   { section: 'Pendências' },
   { path: '/solicitacoes', icon: '📨', label: 'Solicitações', badge: 'solic', badgeColor: 'orange' },
