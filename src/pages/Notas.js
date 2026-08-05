@@ -438,9 +438,18 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
       const parsed = parseExtratoCSV(e.target.result)
       if (!parsed.length) { toast('Não encontrei nenhuma linha de saída (débito) com valor válido no CSV.', 'error'); return }
       const comSugestao = cruzarExtratoComNotasEMedicos(parsed, notas, medicos)
-      setLinhasExtrato(comSugestao)
-      const sugeridos = comSugestao.filter(l => l.medico).length
-      toast(`${parsed.length} transação(ões) de saída · ${sugeridos} sugerida(s)`)
+      // Marca como duplicada qualquer transação que já exista no extrato_bancario
+      // (mesma data e mesmo valor, com pequena margem de centavos)
+      const comDuplicidade = comSugestao.map(l => {
+        const jaExiste = extratoBancario.some(e =>
+          e.data === l.data && Math.abs((e.valor || 0) - l.valor) <= 0.01
+        )
+        return { ...l, jaImportada: jaExiste }
+      })
+      setLinhasExtrato(comDuplicidade)
+      const sugeridos = comDuplicidade.filter(l => l.medico && !l.jaImportada).length
+      const duplicadas = comDuplicidade.filter(l => l.jaImportada).length
+      toast(`${parsed.length} transação(ões) de saída · ${sugeridos} sugerida(s)${duplicadas ? ` · ${duplicadas} já importada(s) antes` : ''}`)
     }
     reader.onerror = () => toast('Erro ao ler o arquivo.', 'error')
     reader.readAsText(file, 'ISO-8859-1')
@@ -455,8 +464,8 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
   }
 
   async function salvarExtratoNota() {
-    const validas = linhasExtrato.filter(l => l.medico)
-    if (!validas.length) { toast('Preencha o médico de pelo menos uma linha antes de salvar.', 'error'); return }
+    const validas = linhasExtrato.filter(l => l.medico && !l.jaImportada)
+    if (!validas.length) { toast('Preencha o médico de pelo menos uma linha (não duplicada) antes de salvar.', 'error'); return }
     setLoadingExtrato(true)
     let sucesso = 0, falhas = 0
 
@@ -472,7 +481,8 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
       } catch (e) { falhas++ }
     }
 
-    // 2) Se TODOS os médicos de uma nota já têm transação identificada, marca a data de pagamento da nota
+    // 2) Se TODOS os médicos de uma nota já têm transação identificada, marca a data de
+    //    pagamento OFICIAL (a data real que veio do extrato do banco) e o status da nota
     const notasAfetadas = new Map()
     validas.forEach(l => {
       if (!l.notaId) return
@@ -817,28 +827,45 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
               {linhasExtrato.length > 0 && (
                 <div className="table-wrap" style={{ marginTop: 14 }}>
                   <div style={{ display: 'flex', alignItems: 'center', marginBottom: 10, gap: 10 }}>
-                    <span style={{ fontSize: 13, fontWeight: 600 }}>Transações importadas ({linhasExtrato.length})</span>
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>
+                      Transações importadas ({linhasExtrato.length})
+                      {linhasExtrato.some(l => l.jaImportada) && (
+                        <span style={{ fontSize: 11, color: 'var(--n4)', fontWeight: 400, marginLeft: 8 }}>
+                          · {linhasExtrato.filter(l => l.jaImportada).length} já importada(s) antes
+                        </span>
+                      )}
+                    </span>
                     <div style={{ flex: 1 }} />
                     <button className="btn btn-ghost btn-sm" onClick={() => setLinhasExtrato([])}>Descartar todas</button>
-                    <button className="btn btn-primary btn-sm" onClick={salvarExtratoNota} disabled={loadingExtrato}>
-                      {loadingExtrato ? 'Salvando…' : '✓ Salvar preenchidas'}
+                    <button className="btn btn-primary btn-sm" onClick={salvarExtratoNota} disabled={loadingExtrato || !linhasExtrato.some(l => l.medico && !l.jaImportada)}>
+                      {loadingExtrato ? 'Salvando…' : `✓ Salvar preenchidas (${linhasExtrato.filter(l => l.medico && !l.jaImportada).length})`}
                     </button>
                   </div>
                   <table>
                     <thead><tr>
-                      <th>Data</th><th style={{ textAlign: 'right' }}>Valor</th><th>Descrição</th><th>NF sugerida</th><th>Médico</th><th></th>
+                      <th>Data</th><th style={{ textAlign: 'right' }}>Valor</th><th>Descrição</th><th>NF sugerida</th><th>Médico</th><th style={{ textAlign: 'center' }}>Status</th><th></th>
                     </tr></thead>
                     <tbody>
                       {linhasExtrato.map((l, i) => (
-                        <tr key={i} style={{ background: l.medico ? '#F0FDF4' : l.ambiguo ? '#FFFBEB' : 'transparent' }}>
+                        <tr key={i} style={{ background: l.jaImportada ? '#F1F5F9' : l.medico ? '#F0FDF4' : l.ambiguo ? '#FFFBEB' : 'transparent', opacity: l.jaImportada ? 0.6 : 1 }}>
                           <td className="mono">{l.data ? fmtMes(l.data.slice(0,7)) + ' · ' + l.data.split('-')[2] : '—'}</td>
                           <td className="mono" style={{ textAlign: 'right', fontWeight: 700 }}>{brl(l.valor)}</td>
                           <td style={{ fontSize: 11, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.descricao}>{l.descricao || '—'}</td>
                           <td className="mono" style={{ fontSize: 11 }}>{l.nf || '—'}</td>
                           <td>
-                            <input type="text" list="med-datalist" value={l.medico} placeholder={l.ambiguo ? '⚠ vários possíveis' : 'Selecionar médico...'}
+                            <select value={l.medico} disabled={l.jaImportada}
                               onChange={e => atualizarLinhaExtrato(i, 'medico', e.target.value)}
-                              style={{ height: 28, fontSize: 12, width: 200, border: '1px solid var(--border)', borderRadius: 6, padding: '0 8px' }} />
+                              style={{ height: 30, fontSize: 12, width: 220, border: '1px solid var(--border)', borderRadius: 6, padding: '0 8px', fontFamily: 'var(--sans)', background: l.jaImportada ? 'var(--n9)' : '#fff' }}>
+                              <option value="">{l.ambiguo ? '⚠ vários possíveis, escolha' : 'Selecionar médico...'}</option>
+                              {medicosOrdenados.map(m => <option key={m.id} value={m.nome}>{m.nome}{m.crm ? ` (${m.crm})` : ''}</option>)}
+                            </select>
+                          </td>
+                          <td style={{ textAlign: 'center' }}>
+                            {l.jaImportada
+                              ? <span className="badge" style={{ background: 'var(--n8)', color: 'var(--n4)' }}>Já importada</span>
+                              : l.medico
+                                ? <span className="badge badge-ok">✓ Pronta</span>
+                                : <span className="badge badge-emit">Pendente</span>}
                           </td>
                           <td>
                             <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--n5)', fontSize: 14 }}
