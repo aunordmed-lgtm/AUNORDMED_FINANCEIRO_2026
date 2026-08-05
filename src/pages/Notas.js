@@ -172,6 +172,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
   // Extrato (nova aba)
   const [linhasExtrato, setLinhasExtrato] = useState([])
   const [loadingExtrato, setLoadingExtrato] = useState(false)
+  const [sincronizandoExtrato, setSincronizandoExtrato] = useState(false)
   const [buscaExtratoConfirmado, setBuscaExtratoConfirmado] = useState('')
   const [expandidoExtratoConfirmado, setExpandidoExtratoConfirmado] = useState(null)
   const [editandoExtratoId, setEditandoExtratoId] = useState(null)
@@ -610,6 +611,36 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
     }
   }
 
+  // Sincronização retroativa: varre TODAS as notas já marcadas "Paga ao médico"
+  // (inclusive as que já estavam assim antes dessa funcionalidade existir) e cria
+  // no extrato_bancario o que estiver faltando, sem duplicar o que já existe.
+  async function sincronizarTodasNotasPagas() {
+    setSincronizandoExtrato(true)
+    const notasPagas = notas.filter(n => n.status === 'Paga ao médico' && n.medicos_nota?.length)
+    let criados = 0, jaExistiam = 0
+    const criadosNesteLote = new Set()
+    for (const nota of notasPagas) {
+      const dataRef = nota.data_pagamento
+        || (nota.mes_recebimento ? `${nota.mes_recebimento}-01` : new Date().toISOString().split('T')[0])
+      for (const mn of nota.medicos_nota) {
+        const chave = `${nota.nf}|${mn.nome}`
+        const jaExisteNoBanco = extratoBancario.some(e => e.nf === nota.nf && e.medico_nome === mn.nome)
+        if (jaExisteNoBanco || criadosNesteLote.has(chave)) { jaExistiam++; continue }
+        try {
+          await supabase.from('extrato_bancario').insert({
+            data: dataRef, valor: mn.repasse || 0, medico_nome: mn.nome, nf: nota.nf,
+            descricao: '(sincronizado retroativamente de notas já pagas)', conferido: true,
+          })
+          criadosNesteLote.add(chave)
+          criados++
+        } catch (e) {}
+      }
+    }
+    setSincronizandoExtrato(false)
+    toast(`${criados} lançamento(s) criado(s) no extrato · ${jaExistiam} já existiam`)
+    onRefresh()
+  }
+
   const alterarStatus = async (id, status) => {
     await supabase.from('notas_fiscais').update({ status }).eq('id', id)
     if (status === 'Paga ao médico') {
@@ -690,7 +721,15 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
             {label}
           </button>
         ))}
-        {aba === 'lista' && <button className="btn btn-primary btn-sm" style={{ marginLeft: 'auto' }} onClick={abrirNova}>+ Nova nota</button>}
+        {aba === 'lista' && (
+          <>
+            <button className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto' }} onClick={sincronizarTodasNotasPagas} disabled={sincronizandoExtrato}
+              title="Cria no extrato bancário os lançamentos que faltam para notas já marcadas como 'Paga ao médico' antes dessa sincronização existir">
+              {sincronizandoExtrato ? '🔄 Sincronizando…' : '🔄 Sincronizar extrato com notas pagas'}
+            </button>
+            <button className="btn btn-primary btn-sm" onClick={abrirNova}>+ Nova nota</button>
+          </>
+        )}
       </div>
 
       {/* ABA LISTA */}
