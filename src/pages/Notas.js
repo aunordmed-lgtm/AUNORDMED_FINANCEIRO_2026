@@ -174,6 +174,8 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
   const [loadingExtrato, setLoadingExtrato] = useState(false)
   const [buscaExtratoConfirmado, setBuscaExtratoConfirmado] = useState('')
   const [expandidoExtratoConfirmado, setExpandidoExtratoConfirmado] = useState(null)
+  const [editandoExtratoId, setEditandoExtratoId] = useState(null)
+  const [editFormExtrato, setEditFormExtrato] = useState({ data: '', valor: '', medico_nome: '', nf: '' })
   const extratoFileRef = useRef()
 
   useEffect(() => {
@@ -545,6 +547,36 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
     await supabase.from('extrato_bancario').delete().eq('id', item.id)
     toast('Transação removida do extrato.')
     onRefresh()
+  }
+
+  function abrirEdicaoExtrato(item) {
+    setEditandoExtratoId(item.id)
+    setEditFormExtrato({
+      data: item.data ? String(item.data).split('T')[0] : '',
+      valor: String(item.valor ?? ''),
+      medico_nome: item.medico_nome || '',
+      nf: item.nf || '',
+    })
+  }
+
+  function cancelarEdicaoExtrato() { setEditandoExtratoId(null) }
+
+  async function salvarEdicaoExtrato(itemOriginal) {
+    if (!editFormExtrato.medico_nome || !editFormExtrato.valor) { toast('Médico e valor são obrigatórios.', 'error'); return }
+    try {
+      const { error } = await supabase.from('extrato_bancario').update({
+        data: editFormExtrato.data || null,
+        valor: parseFloat(editFormExtrato.valor) || 0,
+        medico_nome: editFormExtrato.medico_nome,
+        nf: editFormExtrato.nf || null,
+      }).eq('id', itemOriginal.id)
+      if (error) throw error
+      toast('Transação atualizada!')
+      setEditandoExtratoId(null)
+      onRefresh()
+    } catch (e) {
+      toast('Erro ao salvar: ' + e.message, 'error')
+    }
   }
 
   const excluir = async (id) => {
@@ -964,16 +996,49 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
                               </tr></thead>
                               <tbody>
                                 {m.itens.map((it, j) => (
-                                  <tr key={j}>
-                                    <td className="mono" style={{ fontSize: 12 }}>{fmtDtExtrato(it.data)}</td>
-                                    <td className="mono" style={{ fontSize: 12, textAlign: 'right' }}>{brl(it.valor)}</td>
-                                    <td className="mono" style={{ fontSize: 11 }}>{it.nf || '—'}</td>
-                                    <td style={{ fontSize: 11, whiteSpace: 'normal', maxWidth: 280 }}>{it.descricao || '—'}</td>
-                                    <td>
-                                      <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--red, #DC2626)', fontSize: 12 }}
-                                        onClick={() => excluirExtratoConfirmado(it)}>✕ excluir</button>
-                                    </td>
-                                  </tr>
+                                  editandoExtratoId === it.id ? (
+                                    <tr key={j} style={{ background: '#FFFBEB' }}>
+                                      <td>
+                                        <input type="date" value={editFormExtrato.data}
+                                          onChange={e => setEditFormExtrato(f => ({ ...f, data: e.target.value }))}
+                                          style={{ height: 28, fontSize: 11, width: 130, border: '1px solid var(--border)', borderRadius: 6, padding: '0 6px' }} />
+                                      </td>
+                                      <td>
+                                        <input type="number" step="0.01" value={editFormExtrato.valor}
+                                          onChange={e => setEditFormExtrato(f => ({ ...f, valor: e.target.value }))}
+                                          style={{ height: 28, fontSize: 11, width: 90, textAlign: 'right', border: '1px solid var(--border)', borderRadius: 6, padding: '0 6px' }} />
+                                      </td>
+                                      <td>
+                                        <input type="text" value={editFormExtrato.nf}
+                                          onChange={e => setEditFormExtrato(f => ({ ...f, nf: e.target.value }))}
+                                          style={{ height: 28, fontSize: 11, width: 80, border: '1px solid var(--border)', borderRadius: 6, padding: '0 6px' }} />
+                                      </td>
+                                      <td>
+                                        <select value={editFormExtrato.medico_nome}
+                                          onChange={e => setEditFormExtrato(f => ({ ...f, medico_nome: e.target.value }))}
+                                          style={{ height: 28, fontSize: 11, width: 200, border: '1px solid var(--border)', borderRadius: 6, padding: '0 6px', fontFamily: 'var(--sans)' }}>
+                                          {medicosOrdenados.map(md => <option key={md.id} value={md.nome}>{md.nome}</option>)}
+                                        </select>
+                                      </td>
+                                      <td style={{ whiteSpace: 'nowrap' }}>
+                                        <button onClick={() => salvarEdicaoExtrato(it)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--g3)', fontSize: 12, fontWeight: 700, marginRight: 8 }}>✓ Salvar</button>
+                                        <button onClick={cancelarEdicaoExtrato} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--n5)', fontSize: 12 }}>Cancelar</button>
+                                      </td>
+                                    </tr>
+                                  ) : (
+                                    <tr key={j}>
+                                      <td className="mono" style={{ fontSize: 12 }}>{fmtDtExtrato(it.data)}</td>
+                                      <td className="mono" style={{ fontSize: 12, textAlign: 'right' }}>{brl(it.valor)}</td>
+                                      <td className="mono" style={{ fontSize: 11 }}>{it.nf || '—'}</td>
+                                      <td style={{ fontSize: 11, whiteSpace: 'normal', maxWidth: 280 }}>{it.descricao || '—'}</td>
+                                      <td style={{ whiteSpace: 'nowrap' }}>
+                                        <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--g3)', fontSize: 12, marginRight: 10 }}
+                                          onClick={() => abrirEdicaoExtrato(it)}>✏️ Corrigir</button>
+                                        <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--red, #DC2626)', fontSize: 12 }}
+                                          onClick={() => excluirExtratoConfirmado(it)}>✕ excluir</button>
+                                      </td>
+                                    </tr>
+                                  )
                                 ))}
                               </tbody>
                             </table>
