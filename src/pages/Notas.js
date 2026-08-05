@@ -144,6 +144,10 @@ function calcNota(bruto, medsSel) {
 export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
   const { toast } = useToast()
   const [aba, setAba] = useState('lista')
+  const [fPlanCompDe, setFPlanCompDe] = useState('')
+  const [fPlanCompAte, setFPlanCompAte] = useState('')
+  const [fPlanCaixa, setFPlanCaixa] = useState('') // '' | 'pago' | 'pendente'
+  const [fPlanMedico, setFPlanMedico] = useState('')
   const [modalOpen, setModalOpen] = useState(false)
   const [abaModal, setAbaModal] = useState('dados') // dados | importar
   const [editando, setEditando] = useState(null)
@@ -197,13 +201,52 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
   }, [])
 
   const medicosOrdenados = useMemo(() => [...medicos].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')), [medicos])
-  const comps = useMemo(() => [...new Set(notas.map(n => n.comp).filter(Boolean))].sort(), [notas])
   const tomadoresLista = useMemo(() => [...new Set(notas.map(n => n.tomador).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR')), [notas])
   const medicosDasNotas = useMemo(() => {
     const s = new Set()
     notas.forEach(n => (n.medicos_nota || []).forEach(mn => mn.nome && s.add(mn.nome)))
     return [...s].sort((a, b) => a.localeCompare(b, 'pt-BR'))
   }, [notas])
+
+  // ── Planilha por médico: uma linha por (nota, médico), agrupada por médico ──
+  const linhasPlanilha = useMemo(() => {
+    const out = []
+    notas.forEach(n => {
+      if (fPlanCompDe && n.comp && n.comp < fPlanCompDe) return
+      if (fPlanCompAte && n.comp && n.comp > fPlanCompAte) return
+      const pago = n.status === 'Paga ao médico'
+      if (fPlanCaixa === 'pago' && !pago) return
+      if (fPlanCaixa === 'pendente' && pago) return
+      ;(n.medicos_nota || []).forEach(mn => {
+        if (fPlanMedico && mn.nome !== fPlanMedico) return
+        out.push({
+          medico: mn.nome, notaId: n.id, nf: n.nf, tomador: n.tomador, comp: n.comp,
+          bruto: mn.valor_bruto_medico || 0, retencao: mn.retencao_individual || 13,
+          repasse: mn.repasse || 0, status: n.status, pago,
+          dataPagamento: n.data_pagamento || null,
+        })
+      })
+    })
+    return out
+  }, [notas, fPlanCompDe, fPlanCompAte, fPlanCaixa, fPlanMedico])
+
+  const planilhaPorMedico = useMemo(() => {
+    const m = {}
+    linhasPlanilha.forEach(l => {
+      if (!m[l.medico]) m[l.medico] = { medico: l.medico, linhas: [], bruto: 0, repasse: 0, pago: 0, qtd: 0 }
+      m[l.medico].linhas.push(l)
+      m[l.medico].bruto += l.bruto
+      m[l.medico].repasse += l.repasse
+      if (l.pago) m[l.medico].pago += l.repasse
+      m[l.medico].qtd++
+    })
+    Object.values(m).forEach(g => g.linhas.sort((a, b) => (b.comp || '').localeCompare(a.comp || '')))
+    return Object.values(m).sort((a, b) => a.medico.localeCompare(b.medico, 'pt-BR'))
+  }, [linhasPlanilha])
+
+  const totaisPlanilha = useMemo(() => linhasPlanilha.reduce((a, l) => ({
+    bruto: a.bruto + l.bruto, repasse: a.repasse + l.repasse, pago: a.pago + (l.pago ? l.repasse : 0),
+  }), { bruto: 0, repasse: 0, pago: 0 }), [linhasPlanilha])
 
   const extratoPorMedico = useMemo(() => {
     const m = {}
@@ -735,7 +778,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
       `}</style>
       {/* Abas principais */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 14, borderBottom: '1px solid var(--border)' }}>
-        {[['lista','📄 Notas fiscais'],['relatorio','📊 Relatório por período'],['extrato','🏦 Extrato']].map(([id, label]) => (
+        {[['lista','📄 Notas fiscais'],['relatorio','📊 Relatório por período'],['extrato','🏦 Extrato'],['planilha','📋 Planilha']].map(([id, label]) => (
           <button key={id} onClick={() => setAba(id)} style={{ padding: '8px 18px', border: 'none', borderBottom: aba===id?'2px solid var(--g5)':'2px solid transparent', background: 'none', cursor: 'pointer', fontSize: 13, fontWeight: aba===id?600:400, color: aba===id?'var(--g3)':'var(--n5)', fontFamily: 'var(--sans)' }}>
             {label}
           </button>
@@ -804,7 +847,6 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
                         const meds = n.medicos_nota || (n.nomes_medicos ? n.nomes_medicos.split(',').map(s => ({ nome: s.trim() })) : [])
                         if (!meds.length) return '—'
                         const primeiro = meds[0].nome
-                        const todos = meds.map(m => m.nome).join('\n')
                         const count = meds.length
                         return (
                           <div style={{ position:'relative', display:'inline-block' }} className="med-hover-wrap">
@@ -1138,6 +1180,77 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
             </div>
           </div>
         </>
+      )}
+
+      {/* ABA PLANILHA — visão simples, tipo planilha, organizada por médico */}
+      {aba === 'planilha' && (
+        <div className="card">
+          <div className="table-toolbar" style={{ flexWrap: 'wrap' }}>
+            <span className="table-title">Planilha por médico</span>
+            <select className="filter-select" value={fPlanMedico} onChange={e => setFPlanMedico(e.target.value)}>
+              <option value="">Todos médicos</option>
+              {medicosDasNotas.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <input type="month" className="filter-select" style={{ width: 140 }} value={fPlanCompDe} onChange={e => setFPlanCompDe(e.target.value)} title="Competência de" />
+            <input type="month" className="filter-select" style={{ width: 140 }} value={fPlanCompAte} onChange={e => setFPlanCompAte(e.target.value)} title="Competência até" />
+            <select className="filter-select" value={fPlanCaixa} onChange={e => setFPlanCaixa(e.target.value)}>
+              <option value="">Caixa: todos</option>
+              <option value="pago">✓ Já pago (caixa)</option>
+              <option value="pendente">Pendente</option>
+            </select>
+            {(fPlanMedico || fPlanCompDe || fPlanCompAte || fPlanCaixa) && (
+              <button className="btn btn-ghost btn-xs" onClick={() => { setFPlanMedico(''); setFPlanCompDe(''); setFPlanCompAte(''); setFPlanCaixa('') }}>Limpar filtros</button>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', gap: 10, padding: '10px 16px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 12, color: 'var(--n4)' }}>Bruto total: <strong style={{ color: 'var(--n1)' }}>{brl(totaisPlanilha.bruto)}</strong></div>
+            <div style={{ fontSize: 12, color: 'var(--n4)' }}>Repasse devido: <strong style={{ color: 'var(--blue)' }}>{brl(totaisPlanilha.repasse)}</strong></div>
+            <div style={{ fontSize: 12, color: 'var(--n4)' }}>Pago (caixa): <strong style={{ color: 'var(--g3)' }}>{brl(totaisPlanilha.pago)}</strong></div>
+            <div style={{ fontSize: 12, color: 'var(--n4)' }}>Pendente: <strong style={{ color: '#DC2626' }}>{brl(totaisPlanilha.repasse - totaisPlanilha.pago)}</strong></div>
+          </div>
+
+          {/* Planilha corrida, rolável, agrupada por médico */}
+          <div style={{ maxHeight: 620, overflowY: 'auto' }}>
+            {planilhaPorMedico.length === 0 && (
+              <div className="empty-state"><div className="empty-icon">📋</div><h4>Nada aqui</h4><p>Ajuste os filtros ou cadastre notas</p></div>
+            )}
+            {planilhaPorMedico.map((g, gi) => (
+              <div key={gi}>
+                <div style={{
+                  position: 'sticky', top: 0, zIndex: 1, background: 'var(--g1)', color: '#fff',
+                  padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 12, fontSize: 12.5, fontWeight: 700,
+                }}>
+                  <span style={{ flex: 1 }}>👨‍⚕️ {g.medico}</span>
+                  <span style={{ fontSize: 11, fontWeight: 500, opacity: .85 }}>{g.qtd} nota(s)</span>
+                  <span className="mono" style={{ fontSize: 11, opacity: .85 }}>Bruto {brl(g.bruto)}</span>
+                  <span className="mono" style={{ fontSize: 11, fontWeight: 700 }}>Repasse {brl(g.repasse)}</span>
+                  <span className="mono" style={{ fontSize: 11, color: g.pago >= g.repasse - 0.01 ? '#86EFAC' : '#FDE68A' }}>
+                    Pago {brl(g.pago)}
+                  </span>
+                </div>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <tbody>
+                    {g.linhas.map((l, li) => (
+                      <tr key={li} style={{ background: l.pago ? '#F0FDF4' : 'transparent', borderBottom: '1px solid var(--n9)' }}>
+                        <td style={{ padding: '7px 16px', fontSize: 11.5, width: 90 }} className="mono">{fmtMes(l.comp)}</td>
+                        <td style={{ padding: '7px 8px', fontSize: 11.5, width: 90 }} className="mono">{l.nf || '—'}</td>
+                        <td style={{ padding: '7px 8px', fontSize: 11.5 }}>{l.tomador || '—'}</td>
+                        <td style={{ padding: '7px 8px', fontSize: 11.5, textAlign: 'right', width: 100 }} className="mono">{brl(l.bruto)}</td>
+                        <td style={{ padding: '7px 8px', fontSize: 11.5, textAlign: 'center', width: 60, color: 'var(--n4)' }} className="mono">{l.retencao}%</td>
+                        <td style={{ padding: '7px 8px', fontSize: 11.5, textAlign: 'right', width: 100, fontWeight: 700, color: 'var(--blue)' }} className="mono">{brl(l.repasse)}</td>
+                        <td style={{ padding: '7px 8px', fontSize: 11, textAlign: 'center', width: 130 }}>
+                          <span className={`badge ${l.pago ? 'badge-ok' : l.status === 'Recebida' ? 'badge-rec' : 'badge-emit'}`}>{l.status}</span>
+                        </td>
+                        <td style={{ padding: '7px 16px', fontSize: 11, width: 90 }} className="mono">{l.dataPagamento ? l.dataPagamento.split('-').reverse().join('/') : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       {/* MODAL NOTA */}
