@@ -9,6 +9,13 @@ function normalizarTxt(s) {
   return (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
 }
 
+function fmtDtExtrato(d) {
+  if (!d) return '—'
+  const p = String(d).split('T')[0].split('-')
+  if (p.length !== 3) return d
+  return `${p[2]}/${p[1]}/${p[0]}`
+}
+
 // Parser de CSV de extrato bancário — mesma lógica usada em ImportarExtratoCSV.jsx
 function parseExtratoCSV(text) {
   const linhas = text.split(/\r?\n/).filter(l => l.trim())
@@ -165,6 +172,8 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
   // Extrato (nova aba)
   const [linhasExtrato, setLinhasExtrato] = useState([])
   const [loadingExtrato, setLoadingExtrato] = useState(false)
+  const [buscaExtratoConfirmado, setBuscaExtratoConfirmado] = useState('')
+  const [expandidoExtratoConfirmado, setExpandidoExtratoConfirmado] = useState(null)
   const extratoFileRef = useRef()
 
   useEffect(() => {
@@ -192,6 +201,20 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
     notas.forEach(n => (n.medicos_nota || []).forEach(mn => mn.nome && s.add(mn.nome)))
     return [...s].sort((a, b) => a.localeCompare(b, 'pt-BR'))
   }, [notas])
+
+  const extratoPorMedico = useMemo(() => {
+    const m = {}
+    extratoBancario.forEach(e => {
+      const nome = e.medico_nome || '(sem médico)'
+      if (!m[nome]) m[nome] = { medico: nome, total: 0, qtd: 0, itens: [] }
+      m[nome].total += e.valor || 0
+      m[nome].qtd++
+      m[nome].itens.push(e)
+    })
+    return Object.values(m)
+      .filter(x => !buscaExtratoConfirmado || x.medico.toLowerCase().includes(buscaExtratoConfirmado.toLowerCase()))
+      .sort((a, b) => a.medico.localeCompare(b.medico, 'pt-BR'))
+  }, [extratoBancario, buscaExtratoConfirmado])
 
   function toggleSort(key) {
     if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -514,6 +537,13 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
     setLoadingExtrato(false)
     toast(`${sucesso} transação(ões) salva(s)${falhas ? ` · ${falhas} falha(s)` : ''}`)
     setLinhasExtrato(prev => prev.filter(l => !l.medico))
+    onRefresh()
+  }
+
+  async function excluirExtratoConfirmado(item) {
+    if (!window.confirm(`Excluir esse recebimento de ${item.medico_nome} (${brl(item.valor)}) do extrato confirmado?`)) return
+    await supabase.from('extrato_bancario').delete().eq('id', item.id)
+    toast('Transação removida do extrato.')
     onRefresh()
   }
 
@@ -888,6 +918,72 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
                   </table>
                 </div>
               )}
+            </div>
+          </div>
+
+          {/* Recebido confirmado por médico — pra inspecionar/corrigir o que já está salvo */}
+          <div className="card">
+            <div className="card-header" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <h3>✅ Recebido confirmado por médico</h3>
+              <div style={{ flex: 1 }} />
+              <input type="text" placeholder="🔍 Buscar médico..." value={buscaExtratoConfirmado}
+                onChange={e => setBuscaExtratoConfirmado(e.target.value)}
+                style={{ height: 30, fontSize: 12, width: 200, border: '1px solid var(--border)', borderRadius: 6, padding: '0 10px' }} />
+            </div>
+            <div className="table-wrap">
+              <table>
+                <thead><tr>
+                  <th>Médico</th><th style={{ textAlign: 'center' }}>Nº transações</th><th style={{ textAlign: 'right' }}>Total recebido</th><th></th>
+                </tr></thead>
+                <tbody>
+                  {extratoPorMedico.length === 0 && (
+                    <tr><td colSpan={4}><div className="empty-state" style={{ padding: '1.5rem' }}><p>Nenhum recebimento confirmado ainda.</p></div></td></tr>
+                  )}
+                  {extratoPorMedico.map((m, i) => (
+                    <>
+                      <tr key={i}>
+                        <td style={{ fontWeight: 600 }}>{m.medico}</td>
+                        <td className="mono" style={{ textAlign: 'center' }}>{m.qtd}</td>
+                        <td className="mono" style={{ textAlign: 'right', fontWeight: 700, color: 'var(--g3)' }}>{brl(m.total)}</td>
+                        <td style={{ textAlign: 'center' }}>
+                          <button className="btn btn-ghost btn-xs" onClick={() => setExpandidoExtratoConfirmado(expandidoExtratoConfirmado === i ? null : i)}>
+                            {expandidoExtratoConfirmado === i ? 'Ocultar' : 'Ver transações'}
+                          </button>
+                        </td>
+                      </tr>
+                      {expandidoExtratoConfirmado === i && (
+                        <tr>
+                          <td colSpan={4} style={{ padding: 0, background: 'var(--n10)' }}>
+                            <table style={{ width: '100%' }}>
+                              <thead><tr>
+                                <th style={{ fontSize: 10 }}>Data</th>
+                                <th style={{ fontSize: 10, textAlign: 'right' }}>Valor</th>
+                                <th style={{ fontSize: 10 }}>NF</th>
+                                <th style={{ fontSize: 10 }}>Descrição</th>
+                                <th style={{ fontSize: 10 }}></th>
+                              </tr></thead>
+                              <tbody>
+                                {m.itens.map((it, j) => (
+                                  <tr key={j}>
+                                    <td className="mono" style={{ fontSize: 12 }}>{fmtDtExtrato(it.data)}</td>
+                                    <td className="mono" style={{ fontSize: 12, textAlign: 'right' }}>{brl(it.valor)}</td>
+                                    <td className="mono" style={{ fontSize: 11 }}>{it.nf || '—'}</td>
+                                    <td style={{ fontSize: 11, whiteSpace: 'normal', maxWidth: 280 }}>{it.descricao || '—'}</td>
+                                    <td>
+                                      <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--red, #DC2626)', fontSize: 12 }}
+                                        onClick={() => excluirExtratoConfirmado(it)}>✕ excluir</button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </td>
+                        </tr>
+                      )}
+                    </>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         </>
