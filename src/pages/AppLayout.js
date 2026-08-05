@@ -22,10 +22,8 @@ import { ImportacaoNF } from './ImportacaoNF'
 import { RegimeCaixa } from './RegimeCaixa'
 import { Repasses } from './Repasses'
 import { ConferenciaPDF } from './ConferenciaPDF'
-import { ExtratoOFX } from './ExtratoOFX'
 import { Solicitacoes } from './Solicitacoes'
 import { Gargalos } from './Gargalos'
-import { ImportarExtratoCSV } from './ImportarExtratoCSV'
 
 async function safeQueryCustom(fn) {
   try {
@@ -92,7 +90,6 @@ export function AppLayout() {
           <Route path="/importacao" element={<ImportacaoNF {...props} />} />
           <Route path="/solicitacoes" element={<Solicitacoes {...props} />} />
           <Route path="/gargalos" element={<Gargalos {...props} />} />
-          <Route path="/importar-extrato" element={<ImportarExtratoCSV {...props} />} />
           <Route path="/pendencias" element={<Pendencias {...props} />} />
           <Route path="/medicos" element={<Medicos {...props} />} />
           <Route path="/tomadores" element={<Tomadores {...props} />} />
@@ -108,7 +105,6 @@ export function AppLayout() {
           <Route path="/dre" element={<DRE {...props} />} />
           <Route path="/configuracoes" element={<Configuracoes {...props} />} />
           <Route path="/repasses" element={<Repasses {...props} />} />
-          <Route path="/extrato" element={<ExtratoOFX {...props} />} />
           <Route path="/conferencia-pdf" element={<ConferenciaPDF {...props} />} />
         </Routes>
       </div>
