@@ -79,10 +79,12 @@ function TooltipClaro({ active, payload, label }) {
   )
 }
 
-export function Dashboard({ notas = [], medicos = [], extratoBancario = [] }) {
+export function Dashboard({ notas = [], medicos = [] }) {
   const [janela, setJanela] = useState(6)
   const [mostrarTabela, setMostrarTabela] = useState(false)
 
+  // Série mensal: bruto/repasse devido (todas as notas) + recebido real (só as
+  // notas já marcadas "Paga ao médico" — regime de caixa puro, sem depender de extrato importado)
   const serieMensal = useMemo(() => {
     const m = {}
     notas.forEach(n => {
@@ -91,17 +93,11 @@ export function Dashboard({ notas = [], medicos = [], extratoBancario = [] }) {
       m[k].bruto += n.bruto || 0
       m[k].recebido += n.recebido || 0
       m[k].repasse += n.total_repasse || 0
-    })
-    extratoBancario.forEach(e => {
-      if (!e.data) return
-      const [ano, mes] = String(e.data).split('-')
-      const k = `${MESES_ORDER[+mes - 1]}/${ano}`
-      if (!m[k]) m[k] = { name: k, bruto: 0, recebido: 0, repasse: 0, recebidoReal: 0 }
-      m[k].recebidoReal += e.valor || 0
+      if (n.status === 'Paga ao médico') m[k].recebidoReal += n.total_repasse || 0
     })
     const arr = Object.values(m).filter(x => x.name !== 'S/D').sort((a, b) => ordenarChave(a.name, b.name))
     return arr.slice(-janela)
-  }, [notas, extratoBancario, janela])
+  }, [notas, janela])
 
   const mesAtual = serieMensal[serieMensal.length - 1]
   const mesAnterior = serieMensal[serieMensal.length - 2]
@@ -112,13 +108,14 @@ export function Dashboard({ notas = [], medicos = [], extratoBancario = [] }) {
 
   const rankingMedicos = useMemo(() => {
     const porMedico = {}
-    extratoBancario.forEach(e => {
-      if (!e.medico_nome || !e.data) return
-      if (!porMedico[e.medico_nome]) porMedico[e.medico_nome] = { nome: e.medico_nome, total: 0, porMes: {} }
-      porMedico[e.medico_nome].total += e.valor || 0
-      const [ano, mes] = String(e.data).split('-')
-      const k = `${ano}-${mes}`
-      porMedico[e.medico_nome].porMes[k] = (porMedico[e.medico_nome].porMes[k] || 0) + (e.valor || 0)
+    notas.forEach(n => {
+      if (n.status !== 'Paga ao médico' || !n.comp) return
+      ;(n.medicos_nota || []).forEach(mn => {
+        if (!porMedico[mn.nome]) porMedico[mn.nome] = { nome: mn.nome, total: 0, porMes: {} }
+        const valor = mn.repasse || 0
+        porMedico[mn.nome].total += valor
+        porMedico[mn.nome].porMes[n.comp] = (porMedico[mn.nome].porMes[n.comp] || 0) + valor
+      })
     })
     const arr = Object.values(porMedico).sort((a, b) => b.total - a.total).slice(0, 6)
     return arr.map(m => {
@@ -128,7 +125,7 @@ export function Dashboard({ notas = [], medicos = [], extratoBancario = [] }) {
       const penultimo = spark[spark.length - 2]?.v || 0
       return { ...m, spark, variacaoVal: variacao(ultimo, penultimo) }
     })
-  }, [extratoBancario])
+  }, [notas])
 
   const varBruto = variacao(mesAtual?.bruto, mesAnterior?.bruto)
   const varRecebidoReal = variacao(mesAtual?.recebidoReal, mesAnterior?.recebidoReal)
