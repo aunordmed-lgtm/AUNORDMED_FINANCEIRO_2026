@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useToast } from '../components/Toast'
+import { useAuth } from '../contexts/AuthContext'
 
 const brl = v => Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const fmtDt = d => {
@@ -153,12 +154,26 @@ function sugerirMedicos(linhasCsv, notas, medicos) {
 
 export function ImportarExtratoCSV({ notas = [], medicos = [], extratoBancario = [], onRefresh }) {
   const { toast } = useToast()
+  const { user } = useAuth()
+  const usuarioAtual = user?.email || 'desconhecido'
+  const [aba, setAba] = useState('importar') // 'importar' | 'relatorio'
   const [linhas, setLinhas] = useState([])
   const [loading, setLoading] = useState(false)
   const [buscaMedico, setBuscaMedico] = useState('')
+  const [relMedico, setRelMedico] = useState('')
+  const [relDe, setRelDe] = useState('')
+  const [relAte, setRelAte] = useState('')
+  const [relMesRapido, setRelMesRapido] = useState('')
+  const [editandoId, setEditandoId] = useState(null)
+  const [editForm, setEditForm] = useState({ data: '', valor: '', medico_nome: '', nf: '', descricao: '' })
+  const [modalManual, setModalManual] = useState(false)
+  const [formManual, setFormManual] = useState({ data: '', medico_nome: '', valor: '', nf: '', descricao: '' })
+  const [salvandoManual, setSalvandoManual] = useState(false)
   const fileRef = useRef()
 
   const medicosOrdenados = useMemo(() => [...medicos].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')), [medicos])
+  const medicosComExtrato = useMemo(() => [...new Set(extratoBancario.map(e => e.medico_nome).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR')), [extratoBancario])
+  const mesesDisponiveis = useMemo(() => [...new Set(extratoBancario.map(e => e.data ? String(e.data).slice(0, 7) : null).filter(Boolean))].sort().reverse(), [extratoBancario])
 
   function processarArquivo(file) {
     const reader = new FileReader()
@@ -183,6 +198,14 @@ export function ImportarExtratoCSV({ notas = [], medicos = [], extratoBancario =
     setLinhas(prev => prev.filter((_, j) => j !== i))
   }
 
+  async function registrarLog(extratoId, acao, dadosAntes, dadosDepois) {
+    try {
+      await supabase.from('extrato_bancario_log').insert({
+        extrato_id: extratoId, acao, dados_antes: dadosAntes || null, dados_depois: dadosDepois || null, usuario: usuarioAtual,
+      })
+    } catch (e) { /* auditoria não deve travar a operação principal */ }
+  }
+
   async function salvarTudo() {
     const validas = linhas.filter(l => l.medico)
     if (!validas.length) { toast('Preencha o médico de pelo menos uma linha antes de salvar.', 'error'); return }
@@ -190,11 +213,14 @@ export function ImportarExtratoCSV({ notas = [], medicos = [], extratoBancario =
     let sucesso = 0, falhas = 0
     for (const l of validas) {
       try {
-        const { error } = await supabase.from('extrato_bancario').insert({
+        const payload = {
           data: l.data || null, valor: l.valor, descricao: l.descricao || null,
           medico_nome: l.medico, nf: l.nf || null, conferido: true,
-        })
+          origem: 'csv', criado_por: usuarioAtual,
+        }
+        const { data: inserida, error } = await supabase.from('extrato_bancario').insert(payload).select().single()
         if (error) throw error
+        await registrarLog(inserida?.id, 'criado', null, payload)
         sucesso++
       } catch (e) { falhas++ }
     }
@@ -204,11 +230,63 @@ export function ImportarExtratoCSV({ notas = [], medicos = [], extratoBancario =
     if (onRefresh) onRefresh()
   }
 
-  async function excluirSalva(id) {
+  async function excluirSalva(item) {
     if (!window.confirm('Excluir esta transação do extrato salvo?')) return
-    await supabase.from('extrato_bancario').delete().eq('id', id)
+    await supabase.from('extrato_bancario').delete().eq('id', item.id)
+    await registrarLog(item.id, 'excluido', item, null)
     toast('Removida.')
     if (onRefresh) onRefresh()
+  }
+
+  function abrirEdicao(item) {
+    setEditandoId(item.id)
+    setEditForm({
+      data: item.data || '', valor: String(item.valor ?? ''), medico_nome: item.medico_nome || '',
+      nf: item.nf || '', descricao: item.descricao || '',
+    })
+  }
+
+  function cancelarEdicao() { setEditandoId(null) }
+
+  async function salvarEdicao(itemOriginal) {
+    if (!editForm.medico_nome || !editForm.valor) { toast('Médico e valor são obrigatórios.', 'error'); return }
+    const payload = {
+      data: editForm.data || null, valor: parseFloat(editForm.valor) || 0, medico_nome: editForm.medico_nome,
+      nf: editForm.nf || null, descricao: editForm.descricao || null,
+      atualizado_em: new Date().toISOString(), atualizado_por: usuarioAtual,
+    }
+    try {
+      const { error } = await supabase.from('extrato_bancario').update(payload).eq('id', itemOriginal.id)
+      if (error) throw error
+      await registrarLog(itemOriginal.id, 'editado', itemOriginal, { ...itemOriginal, ...payload })
+      toast('Transação corrigida!')
+      setEditandoId(null)
+      if (onRefresh) onRefresh()
+    } catch (e) {
+      toast('Erro ao salvar correção: ' + e.message, 'error')
+    }
+  }
+
+  async function salvarPagamentoManual() {
+    if (!formManual.medico_nome || !formManual.valor) { toast('Médico e valor são obrigatórios.', 'error'); return }
+    setSalvandoManual(true)
+    try {
+      const payload = {
+        data: formManual.data || null, valor: parseFloat(formManual.valor) || 0, medico_nome: formManual.medico_nome,
+        nf: formManual.nf || null, descricao: formManual.descricao || '(lançamento manual)', conferido: true,
+        origem: 'manual', criado_por: usuarioAtual,
+      }
+      const { data: inserida, error } = await supabase.from('extrato_bancario').insert(payload).select().single()
+      if (error) throw error
+      await registrarLog(inserida?.id, 'criado', null, payload)
+      toast('Pagamento manual registrado!')
+      setModalManual(false)
+      setFormManual({ data: '', medico_nome: '', valor: '', nf: '', descricao: '' })
+      if (onRefresh) onRefresh()
+    } catch (e) {
+      toast('Erro ao salvar: ' + e.message, 'error')
+    }
+    setSalvandoManual(false)
   }
 
   // Agregação por médico do que já está salvo — essa é a fonte confiável de "quanto recebeu"
@@ -229,6 +307,60 @@ export function ImportarExtratoCSV({ notas = [], medicos = [], extratoBancario =
   const totalGeralSalvo = extratoBancario.reduce((a, e) => a + (e.valor || 0), 0)
   const [expandido, setExpandido] = useState(null)
 
+  // ── RELATÓRIO ──
+  const extratoRelFiltrado = useMemo(() => {
+    return extratoBancario.filter(e => {
+      if (relMedico && e.medico_nome !== relMedico) return false
+      const mes = e.data ? String(e.data).slice(0, 7) : ''
+      if (relMesRapido) return mes === relMesRapido
+      if (relDe && mes && mes < relDe) return false
+      if (relAte && mes && mes > relAte) return false
+      return true
+    })
+  }, [extratoBancario, relMedico, relDe, relAte, relMesRapido])
+
+  const porMesRel = useMemo(() => {
+    const m = {}
+    extratoRelFiltrado.forEach(e => {
+      const mes = e.data ? String(e.data).slice(0, 7) : 'Sem data'
+      if (!m[mes]) m[mes] = { mes, total: 0, qtd: 0 }
+      m[mes].total += e.valor || 0
+      m[mes].qtd++
+    })
+    return Object.values(m).sort((a, b) => b.mes.localeCompare(a.mes))
+  }, [extratoRelFiltrado])
+
+  const porMedicoRel = useMemo(() => {
+    const m = {}
+    extratoRelFiltrado.forEach(e => {
+      const nome = e.medico_nome || '(sem médico)'
+      if (!m[nome]) m[nome] = { medico: nome, total: 0, qtd: 0 }
+      m[nome].total += e.valor || 0
+      m[nome].qtd++
+    })
+    return Object.values(m).sort((a, b) => b.total - a.total)
+  }, [extratoRelFiltrado])
+
+  const relTotal = extratoRelFiltrado.reduce((a, e) => a + (e.valor || 0), 0)
+  const relMedicosUnicos = new Set(extratoRelFiltrado.map(e => e.medico_nome).filter(Boolean)).size
+
+  function limparFiltrosRel() { setRelMedico(''); setRelDe(''); setRelAte(''); setRelMesRapido('') }
+
+  function exportarRelatorio() {
+    const headers = ['Data', 'Médico', 'Valor', 'NF', 'Descrição']
+    const rows = extratoRelFiltrado
+      .sort((a, b) => (b.data || '').localeCompare(a.data || ''))
+      .map(e => [e.data ? fmtDt(e.data) : '', e.medico_nome || '', e.valor.toFixed(2).replace('.', ','), e.nf || '', e.descricao || ''])
+    const csv = [headers, ...rows].map(r => r.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(';')).join('\n')
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `relatorio_extrato_bancario.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <div style={{ height: '100%', overflowY: 'auto', overflowX: 'hidden' }}>
       <div style={{ padding: 24, maxWidth: 1100, margin: '0 auto' }}>
@@ -240,6 +372,62 @@ export function ImportarExtratoCSV({ notas = [], medicos = [], extratoBancario =
           </div>
         </div>
 
+        {/* Toggle de abas */}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 16, alignItems: 'center' }}>
+          {[{ k: 'importar', label: '📤 Importar' }, { k: 'relatorio', label: '📊 Relatório' }].map(t => (
+            <button key={t.k} onClick={() => setAba(t.k)} style={{
+              padding: '8px 16px', borderRadius: 10, cursor: 'pointer', fontSize: 12.5, fontWeight: 600,
+              border: '1px solid ' + (aba === t.k ? G.g3 : '#D4E6DA'),
+              background: aba === t.k ? G.g3 : '#fff',
+              color: aba === t.k ? '#fff' : GRAY[2],
+            }}>{t.label}</button>
+          ))}
+          <div style={{ flex: 1 }} />
+          <button onClick={() => setModalManual(true)} style={btnPrimary}>+ Adicionar pagamento manual</button>
+        </div>
+
+        {modalManual && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.45)', zIndex: 999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+            onClick={() => setModalManual(false)}>
+            <div style={{ ...cardStyle, width: 420, maxWidth: '100%', padding: 22 }} onClick={e => e.stopPropagation()}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: GRAY[0], marginBottom: 4 }}>💵 Adicionar pagamento manual</div>
+              <div style={{ fontSize: 11.5, color: GRAY[3], marginBottom: 16 }}>Use quando o pagamento não veio de um extrato importado (ex: dinheiro, outro banco, etc.)</div>
+
+              <div style={{ marginBottom: 10 }}>
+                <label style={labelStyle}>Médico *</label>
+                <input type="text" list="ie-med-datalist" value={formManual.medico_nome} onChange={e => setFormManual(f => ({ ...f, medico_nome: e.target.value }))}
+                  style={{ ...inputStyle, width: '100%' }} placeholder="Nome do médico" />
+              </div>
+              <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
+                <div style={{ flex: 1 }}>
+                  <label style={labelStyle}>Data</label>
+                  <input type="date" value={formManual.data} onChange={e => setFormManual(f => ({ ...f, data: e.target.value }))} style={{ ...inputStyle, width: '100%' }} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label style={labelStyle}>Valor (R$) *</label>
+                  <input type="number" step="0.01" min="0" value={formManual.valor} onChange={e => setFormManual(f => ({ ...f, valor: e.target.value }))} style={{ ...inputStyle, width: '100%' }} placeholder="0,00" />
+                </div>
+              </div>
+              <div style={{ marginBottom: 10 }}>
+                <label style={labelStyle}>Nº da NF (opcional)</label>
+                <input type="text" value={formManual.nf} onChange={e => setFormManual(f => ({ ...f, nf: e.target.value }))} style={{ ...inputStyle, width: '100%' }} />
+              </div>
+              <div style={{ marginBottom: 18 }}>
+                <label style={labelStyle}>Observação (opcional)</label>
+                <input type="text" value={formManual.descricao} onChange={e => setFormManual(f => ({ ...f, descricao: e.target.value }))} style={{ ...inputStyle, width: '100%' }} placeholder="Ex: pago em dinheiro" />
+              </div>
+
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                <button onClick={() => setModalManual(false)} style={btnGhost}>Cancelar</button>
+                <button onClick={salvarPagamentoManual} style={btnPrimary} disabled={salvandoManual}>
+                  {salvandoManual ? 'Salvando…' : '✓ Registrar pagamento'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {aba === 'importar' && (<>
         {/* Upload */}
         <div
           style={{ border: '2px dashed #D4E6DA', borderRadius: 14, padding: 32, textAlign: 'center', cursor: 'pointer', background: GRAY[6], marginBottom: 20 }}
@@ -347,19 +535,43 @@ export function ImportarExtratoCSV({ notas = [], medicos = [], extratoBancario =
                               <th style={{ ...thStyle, background: 'transparent', color: GRAY[2], textAlign: 'right' }}>Valor</th>
                               <th style={{ ...thStyle, background: 'transparent', color: GRAY[2] }}>NF</th>
                               <th style={{ ...thStyle, background: 'transparent', color: GRAY[2] }}>Descrição</th>
+                              <th style={{ ...thStyle, background: 'transparent', color: GRAY[2] }}>Origem</th>
                               <th style={{ ...thStyle, background: 'transparent', color: GRAY[2] }}></th>
                             </tr></thead>
                             <tbody>
                               {m.itens.map((it, j) => (
-                                <tr key={j}>
-                                  <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{fmtDt(it.data)}</td>
-                                  <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace' }}>R$ {brl(it.valor)}</td>
-                                  <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{it.nf || '—'}</td>
-                                  <td style={{ ...tdStyle, whiteSpace: 'normal', maxWidth: 300 }}>{it.descricao || '—'}</td>
-                                  <td style={tdStyle}>
-                                    <button onClick={() => excluirSalva(it.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: RED, fontSize: 12 }}>✕ excluir</button>
-                                  </td>
-                                </tr>
+                                editandoId === it.id ? (
+                                  <tr key={j} style={{ background: '#FFFBEB' }}>
+                                    <td style={tdStyle}><input type="date" value={editForm.data} onChange={e => setEditForm(f => ({ ...f, data: e.target.value }))} style={{ ...inputStyle, height: 30, width: 130, fontSize: 11 }} /></td>
+                                    <td style={tdStyle}><input type="number" step="0.01" value={editForm.valor} onChange={e => setEditForm(f => ({ ...f, valor: e.target.value }))} style={{ ...inputStyle, height: 30, width: 100, fontSize: 11, textAlign: 'right' }} /></td>
+                                    <td style={tdStyle}><input type="text" value={editForm.nf} onChange={e => setEditForm(f => ({ ...f, nf: e.target.value }))} style={{ ...inputStyle, height: 30, width: 90, fontSize: 11 }} /></td>
+                                    <td style={tdStyle}>
+                                      <input type="text" list="ie-med-datalist" value={editForm.medico_nome} onChange={e => setEditForm(f => ({ ...f, medico_nome: e.target.value }))} style={{ ...inputStyle, height: 30, width: 180, fontSize: 11 }} placeholder="Médico" />
+                                    </td>
+                                    <td style={{ ...tdStyle, fontSize: 10, color: GRAY[3] }}>{it.origem || 'csv'}</td>
+                                    <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
+                                      <button onClick={() => salvarEdicao(it)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: G.g2, fontSize: 12, fontWeight: 700, marginRight: 8 }}>✓ Salvar</button>
+                                      <button onClick={cancelarEdicao} style={{ background: 'none', border: 'none', cursor: 'pointer', color: GRAY[3], fontSize: 12 }}>Cancelar</button>
+                                    </td>
+                                  </tr>
+                                ) : (
+                                  <tr key={j}>
+                                    <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{fmtDt(it.data)}</td>
+                                    <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace' }}>R$ {brl(it.valor)}</td>
+                                    <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{it.nf || '—'}</td>
+                                    <td style={{ ...tdStyle, whiteSpace: 'normal', maxWidth: 260 }}>{it.descricao || '—'}</td>
+                                    <td style={{ ...tdStyle, fontSize: 10 }}>
+                                      <span style={badge(it.origem === 'manual' ? '#FFFBEB' : G.g7, it.origem === 'manual' ? ORANGE : G.g2, it.origem === 'manual' ? '#FDE68A' : G.g6)}>
+                                        {it.origem === 'manual' ? 'Manual' : 'CSV'}
+                                      </span>
+                                      {it.atualizado_em && <div style={{ color: GRAY[3], marginTop: 2 }}>editado por {it.atualizado_por}</div>}
+                                    </td>
+                                    <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
+                                      <button onClick={() => abrirEdicao(it)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: G.g3, fontSize: 12, marginRight: 10 }}>✏️ Corrigir</button>
+                                      <button onClick={() => excluirSalva(it)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: RED, fontSize: 12 }}>✕ excluir</button>
+                                    </td>
+                                  </tr>
+                                )
                               ))}
                             </tbody>
                           </table>
@@ -372,6 +584,101 @@ export function ImportarExtratoCSV({ notas = [], medicos = [], extratoBancario =
             </table>
           </div>
         </div>
+        </>)}
+
+        {aba === 'relatorio' && (<>
+          <div style={{ ...cardStyle, padding: '16px 20px', marginBottom: 16, display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <div>
+              <label style={labelStyle}>Médico</label>
+              <select style={inputStyle} value={relMedico} onChange={e => setRelMedico(e.target.value)}>
+                <option value="">Todos</option>
+                {medicosComExtrato.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={labelStyle}>Mês (atalho)</label>
+              <select style={inputStyle} value={relMesRapido} onChange={e => { setRelMesRapido(e.target.value); if (e.target.value) { setRelDe(''); setRelAte('') } }}>
+                <option value="">— nenhum —</option>
+                {mesesDisponiveis.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={labelStyle}>Período de</label>
+              <input type="month" style={inputStyle} value={relDe} onChange={e => { setRelDe(e.target.value); setRelMesRapido('') }} disabled={!!relMesRapido} />
+            </div>
+            <div>
+              <label style={labelStyle}>até</label>
+              <input type="month" style={inputStyle} value={relAte} onChange={e => { setRelAte(e.target.value); setRelMesRapido('') }} disabled={!!relMesRapido} />
+            </div>
+            <div style={{ flex: 1 }} />
+            <button onClick={() => { limparFiltrosRel(); setRelMesRapido('') }} style={btnGhost}>Limpar filtros</button>
+            <button onClick={exportarRelatorio} style={btnPrimary}>📥 Exportar CSV</button>
+          </div>
+
+          <div style={{ fontSize: 11, color: GRAY[3], marginBottom: 12, marginTop: -8 }}>
+            📅 Os filtros de período/mês sempre consideram a <strong>data de recebimento</strong> registrada em cada transação do extrato (não a competência da nota).
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 16 }}>
+            <Kpi label="Total no período" value={`R$ ${brl(relTotal)}`} sub={`${extratoRelFiltrado.length} transação(ões)`} color={G.g2} />
+            <Kpi label="Médicos únicos" value={relMedicosUnicos} sub="com recebimento no período" />
+            <Kpi label="Meses com movimento" value={porMesRel.length} />
+          </div>
+
+          <div style={{ ...cardStyle, overflow: 'hidden', marginBottom: 16 }}>
+            <div style={{ padding: '14px 20px', borderBottom: '1px solid #D4E6DA', fontSize: 13, fontWeight: 600, color: GRAY[0] }}>
+              Por mês
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 500 }}>
+                <thead><tr style={{ background: G.g1 }}>
+                  <th style={thStyle}>Mês</th>
+                  <th style={{ ...thStyle, textAlign: 'center' }}>Nº transações</th>
+                  <th style={{ ...thStyle, textAlign: 'right' }}>Total</th>
+                </tr></thead>
+                <tbody>
+                  {porMesRel.length === 0 && (
+                    <tr><td colSpan={3} style={{ ...tdStyle, textAlign: 'center', color: GRAY[3], padding: 30 }}>Nenhuma transação no período selecionado.</td></tr>
+                  )}
+                  {porMesRel.map((m, i) => (
+                    <tr key={i}>
+                      <td style={{ ...tdStyle, fontFamily: 'monospace', fontWeight: 600 }}>{m.mes}</td>
+                      <td style={{ ...tdStyle, textAlign: 'center', fontFamily: 'monospace' }}>{m.qtd}</td>
+                      <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: G.g2 }}>R$ {brl(m.total)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div style={{ ...cardStyle, overflow: 'hidden' }}>
+            <div style={{ padding: '14px 20px', borderBottom: '1px solid #D4E6DA', fontSize: 13, fontWeight: 600, color: GRAY[0] }}>
+              Por médico
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 600 }}>
+                <thead><tr style={{ background: G.g1 }}>
+                  <th style={thStyle}>Médico</th>
+                  <th style={{ ...thStyle, textAlign: 'center' }}>Nº transações</th>
+                  <th style={{ ...thStyle, textAlign: 'right' }}>Total</th>
+                </tr></thead>
+                <tbody>
+                  {porMedicoRel.length === 0 && (
+                    <tr><td colSpan={3} style={{ ...tdStyle, textAlign: 'center', color: GRAY[3], padding: 30 }}>Nenhuma transação no período selecionado.</td></tr>
+                  )}
+                  {porMedicoRel.map((m, i) => (
+                    <tr key={i}>
+                      <td style={{ ...tdStyle, fontWeight: 600 }}>{m.medico}</td>
+                      <td style={{ ...tdStyle, textAlign: 'center', fontFamily: 'monospace' }}>{m.qtd}</td>
+                      <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace', fontWeight: 700, color: G.g2 }}>R$ {brl(m.total)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>)}
       </div>
     </div>
   )
