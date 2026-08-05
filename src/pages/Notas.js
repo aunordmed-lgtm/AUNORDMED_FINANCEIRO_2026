@@ -143,7 +143,8 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
   const [loading, setLoading] = useState(false)
   const [busca, setBusca] = useState('')
   const [fltStatus, setFltStatus] = useState('')
-  const [fltComp, setFltComp] = useState('')
+  const [fltCompDe, setFltCompDe] = useState('')
+  const [fltCompAte, setFltCompAte] = useState('')
   const [fltTomador, setFltTomador] = useState('')
   const [fltMedico, setFltMedico] = useState('')
   const [sortKey, setSortKey] = useState('criado_em')
@@ -207,7 +208,8 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
       (fltStatus === '__diferenca__'
         ? !!(n.mes_recebimento && n.mes_recebimento !== n.comp)
         : (!fltStatus || n.status === fltStatus)) &&
-      (!fltComp || n.comp === fltComp) &&
+      (!fltCompDe || (n.comp && n.comp >= fltCompDe)) &&
+      (!fltCompAte || (n.comp && n.comp <= fltCompAte)) &&
       (!fltTomador || n.tomador === fltTomador) &&
       (!fltMedico || (n.medicos_nota || []).some(mn => mn.nome === fltMedico))
     )
@@ -227,7 +229,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
       return sortDir === 'asc' ? va - vb : vb - va
     })
     return f
-  }, [notas, busca, fltStatus, fltComp, fltTomador, fltMedico, sortKey, sortDir])
+  }, [notas, busca, fltStatus, fltCompDe, fltCompAte, fltTomador, fltMedico, sortKey, sortDir])
 
   const notasRel = useMemo(() => {
     if (relTipo === 'todos') return notas
@@ -614,10 +616,8 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
               <option value="Paga ao médico">Paga ao médico</option>
               <option value="__diferenca__">⚠️ Recebida com diferença</option>
             </select>
-            <select className="filter-select" value={fltComp} onChange={e => setFltComp(e.target.value)}>
-              <option value="">Competências</option>
-              {comps.map(c => <option key={c} value={c}>{fmtMes(c)}</option>)}
-            </select>
+            <input type="month" className="filter-select" style={{ width: 140 }} value={fltCompDe} onChange={e => setFltCompDe(e.target.value)} title="Competência de" />
+            <input type="month" className="filter-select" style={{ width: 140 }} value={fltCompAte} onChange={e => setFltCompAte(e.target.value)} title="Competência até" />
             <select className="filter-select" value={fltTomador} onChange={e => setFltTomador(e.target.value)}>
               <option value="">Todos tomadores</option>
               {tomadoresLista.map(t => <option key={t} value={t}>{t}</option>)}
