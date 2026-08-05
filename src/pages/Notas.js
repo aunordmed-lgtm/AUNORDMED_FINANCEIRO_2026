@@ -440,6 +440,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
       if (editando) {
         const { error } = await supabase.from('notas_fiscais').update(payload).eq('id', editando.id)
         if (error) throw error
+        await sincronizarExtratoDaNota({ ...editando, ...payload, id: editando.id, nf: payload.nf || editando.nf })
         toast('Nota atualizada!')
       } else {
         const { data: nova, error } = await supabase.from('notas_fiscais').insert(payload).select().single()
@@ -586,8 +587,35 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
     onRefresh()
   }
 
+  // Quando uma nota é marcada como "Paga ao médico", garante que cada médico
+  // dela tenha um lançamento no extrato_bancario (data + valor do repasse).
+  // Não duplica se já existir um lançamento pra essa NF + médico.
+  async function sincronizarExtratoDaNota(nota) {
+    if (!nota || nota.status !== 'Paga ao médico' || !nota.medicos_nota?.length) return
+    const dataRef = nota.data_pagamento
+      || (nota.mes_recebimento ? `${nota.mes_recebimento}-01` : new Date().toISOString().split('T')[0])
+    for (const mn of nota.medicos_nota) {
+      const jaExiste = extratoBancario.some(e => e.nf === nota.nf && e.medico_nome === mn.nome)
+      if (jaExiste) continue
+      try {
+        await supabase.from('extrato_bancario').insert({
+          data: dataRef,
+          valor: mn.repasse || 0,
+          medico_nome: mn.nome,
+          nf: nota.nf,
+          descricao: '(gerado automaticamente ao marcar a nota como paga)',
+          conferido: true,
+        })
+      } catch (e) {}
+    }
+  }
+
   const alterarStatus = async (id, status) => {
     await supabase.from('notas_fiscais').update({ status }).eq('id', id)
+    if (status === 'Paga ao médico') {
+      const nota = notas.find(n => n.id === id)
+      if (nota) await sincronizarExtratoDaNota({ ...nota, status })
+    }
     onRefresh()
   }
 
