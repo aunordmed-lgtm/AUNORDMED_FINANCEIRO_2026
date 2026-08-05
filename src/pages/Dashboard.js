@@ -30,7 +30,6 @@ function useCountUp(target, duration = 900) {
     }
     raf = requestAnimationFrame(step)
     return () => cancelAnimationFrame(raf)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target, duration])
   return val
 }
