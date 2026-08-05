@@ -43,11 +43,8 @@ function normalizar(s) {
 function parseCSV(text) {
   const linhas = text.split(/\r?\n/).filter(l => l.trim())
   if (!linhas.length) return []
-  const sepConta = (linha, sep) => linha.split(sep).length
-  const sep = sepConta(linhas[0], ';') > sepConta(linhas[0], ',') ? ';' : ','
 
-  const splitLinha = (linha) => {
-    // split simples respeitando aspas
+  const splitCom = (linha, sep) => {
     const out = []
     let atual = '', dentroAspas = false
     for (let i = 0; i < linha.length; i++) {
@@ -60,17 +57,30 @@ function parseCSV(text) {
     return out.map(s => s.trim().replace(/^"|"$/g, ''))
   }
 
-  const header = splitLinha(linhas[0]).map(h => normalizar(h))
-  const idxData = header.findIndex(h => h.includes('data') || h.includes('date'))
-  const idxValor = header.findIndex(h => h.includes('valor') || h.includes('amount') || h.includes('montante'))
-  const idxDesc = header.findIndex(h => h.includes('descri') || h.includes('histor') || h.includes('memo'))
+  // Extratos de banco costumam ter linhas de metadados (conta, período, saldo)
+  // antes do cabeçalho de verdade. Procura, nas primeiras linhas, aquela que
+  // realmente tem uma coluna "valor" — essa é o cabeçalho de fato.
+  let sep = ';', headerIdx = -1, header = []
+  for (const tentativaSep of [';', ',']) {
+    for (let i = 0; i < Math.min(linhas.length, 20); i++) {
+      const cols = splitCom(linhas[i], tentativaSep).map(c => normalizar(c))
+      if (cols.length >= 3 && cols.some(c => c.includes('valor') || c.includes('amount'))) {
+        sep = tentativaSep; headerIdx = i; header = cols
+        break
+      }
+    }
+    if (headerIdx >= 0) break
+  }
+  if (headerIdx < 0) return [] // não achou nenhuma linha de cabeçalho reconhecível
 
-  if (idxValor < 0) return [] // sem coluna de valor não dá pra continuar
+  const idxData = header.findIndex(h => h.includes('data') || h.includes('date'))
+  const idxValor = header.findIndex(h => h.includes('valor') || h.includes('amount'))
+  const idxDesc = header.findIndex(h => h.includes('descri'))
+  const idxHistorico = header.findIndex(h => h.includes('histor'))
 
   const parseValor = (v) => {
     if (!v) return 0
     let s = String(v).trim().replace(/[R$\s]/g, '')
-    // se tem vírgula como decimal (formato BR), remove pontos de milhar e troca vírgula por ponto
     if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.')
     return parseFloat(s) || 0
   }
@@ -78,43 +88,66 @@ function parseCSV(text) {
   const parseData = (v) => {
     if (!v) return ''
     const s = String(v).trim()
-    // DD/MM/YYYY
     let m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/)
     if (m) return `${m[3]}-${m[2]}-${m[1]}`
-    // YYYY-MM-DD já ok
     m = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
     if (m) return `${m[1]}-${m[2]}-${m[3]}`
     return ''
   }
 
-  return linhas.slice(1).map(linha => {
-    const cols = splitLinha(linha)
-    const valor = parseValor(cols[idxValor])
-    if (!valor) return null
+  return linhas.slice(headerIdx + 1).map(linha => {
+    const cols = splitCom(linha, sep)
+    const valorBruto = parseValor(cols[idxValor])
+    if (!valorBruto) return null
+    // Só nos interessam saídas (pagamentos/pix enviado) — dinheiro saindo pro médico
+    if (valorBruto >= 0) return null
+    const descricao = idxDesc >= 0 ? cols[idxDesc] : ''
+    const historico = idxHistorico >= 0 ? cols[idxHistorico] : ''
     return {
       data: idxData >= 0 ? parseData(cols[idxData]) : '',
-      valor: Math.abs(valor),
-      descricao: idxDesc >= 0 ? cols[idxDesc] : '',
+      valor: Math.abs(valorBruto),
+      descricao: descricao || historico,
+      historico,
     }
   }).filter(Boolean)
 }
 
-// Sugere um médico pra cada transação, comparando o valor com os repasses esperados nas notas.
-function sugerirMedicos(linhasCsv, notas) {
-  const alvos = []
+// Compara nomes de forma tolerante (mesma lógica usada na importação de Excel de médicos em Notas.jsx)
+function nomesSimilares(nomeA, nomeB) {
+  const norm = s => normalizar(s).trim()
+  const a = norm(nomeA).split(' ').filter(Boolean)
+  const b = norm(nomeB).split(' ').filter(Boolean)
+  if (norm(nomeA) === norm(nomeB)) return true
+  if (a.length >= 2 && b.length >= 2 && a[0] === b[0] && a[1] === b[1]) return true
+  if (a.length >= 2 && b.length >= 2 && a[0] === b[0] && a[a.length - 1] === b[b.length - 1]) return true
+  if (b.length >= 2 && a.includes(b[0]) && a.includes(b[1])) return true
+  if (a.length >= 2 && b.includes(a[0]) && b.includes(a[1])) return true
+  return false
+}
+
+// Sugere um médico pra cada transação: primeiro tenta casar pelo NOME que veio na
+// descrição do banco (muito mais confiável), e só cai pro valor quando não achar por nome.
+function sugerirMedicos(linhasCsv, notas, medicos) {
+  const alvosValor = []
   notas.forEach(n => (n.medicos_nota || []).forEach(mn => {
-    if (mn.repasse) alvos.push({ nome: mn.nome, valor: mn.repasse, nf: n.nf })
+    if (mn.repasse) alvosValor.push({ nome: mn.nome, valor: mn.repasse, nf: n.nf })
   }))
 
   return linhasCsv.map(l => {
-    const candidatos = alvos.filter(a => Math.abs(a.valor - l.valor) <= Math.max(0.02, l.valor * 0.005))
+    // 1) match por nome direto contra o cadastro de médicos
+    const porNome = medicos.find(m => nomesSimilares(l.descricao, m.nome))
+    if (porNome) {
+      const alvoValor = alvosValor.find(a => nomesSimilares(a.nome, porNome.nome) && Math.abs(a.valor - l.valor) <= Math.max(0.02, l.valor * 0.005))
+      return { ...l, medico: porNome.nome, nf: alvoValor?.nf || '', origemSugestao: 'nome' }
+    }
+    // 2) fallback: match por valor batendo com algum repasse esperado
+    const candidatos = alvosValor.filter(a => Math.abs(a.valor - l.valor) <= Math.max(0.02, l.valor * 0.005))
     let sugestao = null
     if (candidatos.length === 1) sugestao = candidatos[0]
     else if (candidatos.length > 1) {
-      const nomeNaDesc = candidatos.find(c => normalizar(l.descricao).includes(normalizar(c.nome).split(' ')[0]))
-      sugestao = nomeNaDesc || null
+      sugestao = candidatos.find(c => normalizar(l.descricao).includes(normalizar(c.nome).split(' ')[0])) || null
     }
-    return { ...l, medico: sugestao?.nome || '', nf: sugestao?.nf || '', ambiguo: candidatos.length > 1 && !sugestao }
+    return { ...l, medico: sugestao?.nome || '', nf: sugestao?.nf || '', ambiguo: candidatos.length > 1 && !sugestao, origemSugestao: sugestao ? 'valor' : null }
   })
 }
 
@@ -131,11 +164,12 @@ export function ImportarExtratoCSV({ notas = [], medicos = [], extratoBancario =
     const reader = new FileReader()
     reader.onload = (e) => {
       const parsed = parseCSV(e.target.result)
-      if (!parsed.length) { toast('Não encontrei nenhuma linha com valor válido no CSV.', 'error'); return }
-      const comSugestao = sugerirMedicos(parsed, notas)
+      if (!parsed.length) { toast('Não encontrei nenhuma linha de saída (débito) com valor válido no CSV.', 'error'); return }
+      const comSugestao = sugerirMedicos(parsed, notas, medicos)
       setLinhas(comSugestao)
       const sugeridos = comSugestao.filter(l => l.medico).length
-      toast(`${parsed.length} transação(ões) importada(s) · ${sugeridos} com sugestão automática`)
+      const porNome = comSugestao.filter(l => l.origemSugestao === 'nome').length
+      toast(`${parsed.length} transação(ões) de saída · ${sugeridos} sugerida(s) (${porNome} por nome)`)
     }
     reader.onerror = () => toast('Erro ao ler o arquivo.', 'error')
     reader.readAsText(file, 'ISO-8859-1')
