@@ -5,6 +5,111 @@ import { useToast } from '../components/Toast'
 import { brl, pct, fmtMes, uid } from '../lib/helpers'
 import * as XLSX from 'xlsx'
 
+function normalizarTxt(s) {
+  return (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+}
+
+// Parser de CSV de extrato bancário — mesma lógica usada em ImportarExtratoCSV.jsx
+function parseExtratoCSV(text) {
+  const linhas = text.split(/\r?\n/).filter(l => l.trim())
+  if (!linhas.length) return []
+
+  const splitCom = (linha, sep) => {
+    const out = []
+    let atual = '', dentroAspas = false
+    for (let i = 0; i < linha.length; i++) {
+      const c = linha[i]
+      if (c === '"') dentroAspas = !dentroAspas
+      else if (c === sep && !dentroAspas) { out.push(atual); atual = '' }
+      else atual += c
+    }
+    out.push(atual)
+    return out.map(s => s.trim().replace(/^"|"$/g, ''))
+  }
+
+  let sep = ';', headerIdx = -1, header = []
+  for (const tentativaSep of [';', ',']) {
+    for (let i = 0; i < Math.min(linhas.length, 20); i++) {
+      const cols = splitCom(linhas[i], tentativaSep).map(c => normalizarTxt(c))
+      if (cols.length >= 3 && cols.some(c => c.includes('valor') || c.includes('amount'))) {
+        sep = tentativaSep; headerIdx = i; header = cols
+        break
+      }
+    }
+    if (headerIdx >= 0) break
+  }
+  if (headerIdx < 0) return []
+
+  const idxData = header.findIndex(h => h.includes('data') || h.includes('date'))
+  const idxValor = header.findIndex(h => h.includes('valor') || h.includes('amount'))
+  const idxDesc = header.findIndex(h => h.includes('descri'))
+  const idxHistorico = header.findIndex(h => h.includes('histor'))
+
+  const parseValor = (v) => {
+    if (!v) return 0
+    let s = String(v).trim().replace(/[R$\s]/g, '')
+    if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.')
+    return parseFloat(s) || 0
+  }
+  const parseData = (v) => {
+    if (!v) return ''
+    const s = String(v).trim()
+    let m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/)
+    if (m) return `${m[3]}-${m[2]}-${m[1]}`
+    m = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
+    if (m) return `${m[1]}-${m[2]}-${m[3]}`
+    return ''
+  }
+
+  return linhas.slice(headerIdx + 1).map(linha => {
+    const cols = splitCom(linha, sep)
+    const valorBruto = parseValor(cols[idxValor])
+    if (!valorBruto || valorBruto >= 0) return null // só débitos (saídas)
+    const descricao = idxDesc >= 0 ? cols[idxDesc] : ''
+    const historico = idxHistorico >= 0 ? cols[idxHistorico] : ''
+    return {
+      data: idxData >= 0 ? parseData(cols[idxData]) : '',
+      valor: Math.abs(valorBruto),
+      descricao: descricao || historico,
+    }
+  }).filter(Boolean)
+}
+
+function nomesSimilaresExtrato(nomeA, nomeB) {
+  const norm = s => normalizarTxt(s).trim()
+  const a = norm(nomeA).split(' ').filter(Boolean)
+  const b = norm(nomeB).split(' ').filter(Boolean)
+  if (norm(nomeA) === norm(nomeB)) return true
+  if (a.length >= 2 && b.length >= 2 && a[0] === b[0] && a[1] === b[1]) return true
+  if (a.length >= 2 && b.length >= 2 && a[0] === b[0] && a[a.length - 1] === b[b.length - 1]) return true
+  if (b.length >= 2 && a.includes(b[0]) && a.includes(b[1])) return true
+  if (a.length >= 2 && b.includes(a[0]) && b.includes(a[1])) return true
+  return false
+}
+
+// Cruza cada transação do extrato com os médicos das notas (via nome na descrição, depois valor)
+function cruzarExtratoComNotasEMedicos(linhasCsv, notas, medicos) {
+  const alvosValor = []
+  notas.forEach(n => (n.medicos_nota || []).forEach(mn => {
+    if (mn.repasse) alvosValor.push({ nome: mn.nome, valor: mn.repasse, nf: n.nf, notaId: n.id })
+  }))
+
+  return linhasCsv.map(l => {
+    const porNome = medicos.find(m => nomesSimilaresExtrato(l.descricao, m.nome))
+    if (porNome) {
+      const alvo = alvosValor.find(a => nomesSimilaresExtrato(a.nome, porNome.nome) && Math.abs(a.valor - l.valor) <= Math.max(0.02, l.valor * 0.005))
+      return { ...l, medico: porNome.nome, nf: alvo?.nf || '', notaId: alvo?.notaId || null }
+    }
+    const candidatos = alvosValor.filter(a => Math.abs(a.valor - l.valor) <= Math.max(0.02, l.valor * 0.005))
+    let sugestao = null
+    if (candidatos.length === 1) sugestao = candidatos[0]
+    else if (candidatos.length > 1) {
+      sugestao = candidatos.find(c => normalizarTxt(l.descricao).includes(normalizarTxt(c.nome).split(' ')[0])) || null
+    }
+    return { ...l, medico: sugestao?.nome || '', nf: sugestao?.nf || '', notaId: sugestao?.notaId || null, ambiguo: candidatos.length > 1 && !sugestao }
+  })
+}
+
 const IMPOSTOS = 0.0615
 const ALIQ_IR = 0.015
 const ALIQ_CSLL = 0.01
@@ -29,7 +134,7 @@ function calcNota(bruto, medsSel) {
   return { bruto: b, recebido, totalRepasse, margem, pct_margem: recebido > 0 ? margem / recebido : 0, meds, ir, csll, pis, cofins }
 }
 
-export function Notas({ notas, medicos, onRefresh }) {
+export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
   const { toast } = useToast()
   const [aba, setAba] = useState('lista')
   const [modalOpen, setModalOpen] = useState(false)
@@ -43,7 +148,7 @@ export function Notas({ notas, medicos, onRefresh }) {
   const [sortKey, setSortKey] = useState('criado_em')
   const [sortDir, setSortDir] = useState('desc')
   const [medSel, setMedSel] = useState([])
-  const [form, setForm] = useState({ nf: '', tomador: '', comp: '', mes_recebimento: '', valor_recebido_real: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
+  const [form, setForm] = useState({ nf: '', tomador: '', comp: '', mes_recebimento: '', valor_recebido_real: '', data_pagamento: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
   // Importação Excel médicos
   const [importPreview, setImportPreview] = useState([])
   const [importErro, setImportErro] = useState('')
@@ -55,6 +160,10 @@ export function Notas({ notas, medicos, onRefresh }) {
   const [relDe, setRelDe] = useState('')
   const [relAte, setRelAte] = useState('')
   const [prefillIds, setPrefillIds] = useState([])
+  // Extrato (nova aba)
+  const [linhasExtrato, setLinhasExtrato] = useState([])
+  const [loadingExtrato, setLoadingExtrato] = useState(false)
+  const extratoFileRef = useRef()
 
   useEffect(() => {
     const raw = localStorage.getItem('aunordmed_prefill_nota')
@@ -150,7 +259,7 @@ export function Notas({ notas, medicos, onRefresh }) {
 
   const abrirNova = () => {
     setEditando(null)
-    setForm({ nf: '', tomador: '', comp: '', mes_recebimento: '', valor_recebido_real: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
+    setForm({ nf: '', tomador: '', comp: '', mes_recebimento: '', valor_recebido_real: '', data_pagamento: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
     setMedSel([])
     setAbaModal('dados')
     setImportPreview([])
@@ -160,7 +269,7 @@ export function Notas({ notas, medicos, onRefresh }) {
 
   const abrirEditar = (nota) => {
     setEditando(nota)
-    setForm({ nf: nota.nf || '', tomador: nota.tomador || '', comp: nota.comp || '', mes_recebimento: nota.mes_recebimento || '', valor_recebido_real: nota.valor_recebido_real ?? '', emissao: nota.emissao?.split('T')[0] || '', status: nota.status || 'Emitida', obs: nota.obs || '', bruto: nota.bruto || '' })
+    setForm({ nf: nota.nf || '', tomador: nota.tomador || '', comp: nota.comp || '', mes_recebimento: nota.mes_recebimento || '', valor_recebido_real: nota.valor_recebido_real ?? '', data_pagamento: nota.data_pagamento?.split('T')[0] || '', emissao: nota.emissao?.split('T')[0] || '', status: nota.status || 'Emitida', obs: nota.obs || '', bruto: nota.bruto || '' })
     setMedSel(nota.medicos_nota?.map(mn => ({ nome: mn.nome, crm: mn.crm || '', ret: mn.retencao_individual || 13, valor: mn.valor_bruto_medico || '' })) || [])
     setAbaModal('dados')
     setImportPreview([])
@@ -289,6 +398,7 @@ export function Notas({ notas, medicos, onRefresh }) {
       ir: calc.ir, csll: calc.csll, pis: calc.pis, cofins: calc.cofins,
       mes_recebimento: form.mes_recebimento || null,
       valor_recebido_real: form.valor_recebido_real !== '' ? parseFloat(form.valor_recebido_real) : null,
+      data_pagamento: form.data_pagamento || null,
       medicos_nota: medicos_nota.length ? medicos_nota : null, nomes_medicos: medSel.map(m => m.nome).join(', ') || null
     }
     setLoading(true)
@@ -319,6 +429,73 @@ export function Notas({ notas, medicos, onRefresh }) {
       onRefresh()
     } catch(e) { toast('Erro ao salvar: ' + e.message, 'error') }
     setLoading(false)
+  }
+
+  // ── ABA EXTRATO: importar CSV, casar com médicos das notas, salvar ──
+  function processarExtratoNota(file) {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const parsed = parseExtratoCSV(e.target.result)
+      if (!parsed.length) { toast('Não encontrei nenhuma linha de saída (débito) com valor válido no CSV.', 'error'); return }
+      const comSugestao = cruzarExtratoComNotasEMedicos(parsed, notas, medicos)
+      setLinhasExtrato(comSugestao)
+      const sugeridos = comSugestao.filter(l => l.medico).length
+      toast(`${parsed.length} transação(ões) de saída · ${sugeridos} sugerida(s)`)
+    }
+    reader.onerror = () => toast('Erro ao ler o arquivo.', 'error')
+    reader.readAsText(file, 'ISO-8859-1')
+  }
+
+  function atualizarLinhaExtrato(i, campo, valor) {
+    setLinhasExtrato(prev => prev.map((l, j) => j === i ? { ...l, [campo]: valor } : l))
+  }
+
+  function removerLinhaExtrato(i) {
+    setLinhasExtrato(prev => prev.filter((_, j) => j !== i))
+  }
+
+  async function salvarExtratoNota() {
+    const validas = linhasExtrato.filter(l => l.medico)
+    if (!validas.length) { toast('Preencha o médico de pelo menos uma linha antes de salvar.', 'error'); return }
+    setLoadingExtrato(true)
+    let sucesso = 0, falhas = 0
+
+    // 1) Salva cada transação no extrato_bancario (fonte usada pelo Regime de Caixa / Comprovante)
+    for (const l of validas) {
+      try {
+        const { error } = await supabase.from('extrato_bancario').insert({
+          data: l.data || null, valor: l.valor, descricao: l.descricao || null,
+          medico_nome: l.medico, nf: l.nf || null, conferido: true,
+        })
+        if (error) throw error
+        sucesso++
+      } catch (e) { falhas++ }
+    }
+
+    // 2) Se TODOS os médicos de uma nota já têm transação identificada, marca a data de pagamento da nota
+    const notasAfetadas = new Map()
+    validas.forEach(l => {
+      if (!l.notaId) return
+      if (!notasAfetadas.has(l.notaId)) notasAfetadas.set(l.notaId, new Set())
+      notasAfetadas.get(l.notaId).add(l.medico)
+    })
+    for (const [notaId, medicosPagos] of notasAfetadas) {
+      const nota = notas.find(n => n.id === notaId)
+      if (!nota) continue
+      const totalMedicos = (nota.medicos_nota || []).length
+      if (totalMedicos > 0 && medicosPagos.size >= totalMedicos) {
+        const datasDaNota = validas.filter(l => l.notaId === notaId).map(l => l.data).filter(Boolean)
+        const dataMaisRecente = datasDaNota.sort().slice(-1)[0] || null
+        try {
+          await supabase.from('notas_fiscais').update({ data_pagamento: dataMaisRecente, status: nota.status === 'Emitida' ? 'Recebida' : nota.status }).eq('id', notaId)
+        } catch (e) {}
+      }
+    }
+
+    setLoadingExtrato(false)
+    toast(`${sucesso} transação(ões) salva(s)${falhas ? ` · ${falhas} falha(s)` : ''}`)
+    setLinhasExtrato(prev => prev.filter(l => !l.medico))
+    onRefresh()
   }
 
   const excluir = async (id) => {
@@ -399,7 +576,7 @@ export function Notas({ notas, medicos, onRefresh }) {
       `}</style>
       {/* Abas principais */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 14, borderBottom: '1px solid var(--border)' }}>
-        {[['lista','📄 Notas fiscais'],['relatorio','📊 Relatório por período']].map(([id, label]) => (
+        {[['lista','📄 Notas fiscais'],['relatorio','📊 Relatório por período'],['extrato','🏦 Extrato']].map(([id, label]) => (
           <button key={id} onClick={() => setAba(id)} style={{ padding: '8px 18px', border: 'none', borderBottom: aba===id?'2px solid var(--g5)':'2px solid transparent', background: 'none', cursor: 'pointer', fontSize: 13, fontWeight: aba===id?600:400, color: aba===id?'var(--g3)':'var(--n5)', fontFamily: 'var(--sans)' }}>
             {label}
           </button>
@@ -611,6 +788,73 @@ export function Notas({ notas, medicos, onRefresh }) {
         </>
       )}
 
+      {/* ABA EXTRATO */}
+      {aba === 'extrato' && (
+        <>
+          <div className="card" style={{ marginBottom: 14 }}>
+            <div className="card-body">
+              <div style={{ background: 'var(--g10)', border: '1px solid var(--g8)', borderRadius: 'var(--radius-lg)', padding: '12px 16px', marginBottom: 14 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--g2)', marginBottom: 6 }}>🏦 Importar extrato bancário e cruzar com as notas</div>
+                <div style={{ fontSize: 12, color: 'var(--n4)', lineHeight: 1.6 }}>
+                  Envie o extrato do banco em CSV. O sistema tenta casar cada débito (pagamento a médico) com o nome que aparece na descrição do banco, e sugere a nota fiscal correspondente pelo valor do repasse.
+                  Quando <strong>todos os médicos de uma nota</strong> tiverem transação encontrada, a nota é marcada automaticamente com <strong>data de pagamento</strong> e status <strong>"Recebida"</strong>. Isso alimenta direto o <strong>Regime de Caixa</strong> e o <strong>Comprovante do médico</strong>.
+                </div>
+              </div>
+
+              <div
+                style={{ border: '2px dashed var(--border)', borderRadius: 'var(--radius-lg)', padding: 32, textAlign: 'center', cursor: 'pointer', background: 'var(--n10)', marginBottom: 14 }}
+                onClick={() => extratoFileRef.current.click()}
+                onDragOver={e => e.preventDefault()}
+                onDrop={e => { e.preventDefault(); if (e.dataTransfer.files[0]) processarExtratoNota(e.dataTransfer.files[0]) }}
+              >
+                <div style={{ fontSize: 32, marginBottom: 8 }}>📄</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--n2)' }}>Arraste o CSV do extrato aqui, ou clique para selecionar</div>
+                <div style={{ fontSize: 11, color: 'var(--n5)', marginTop: 4 }}>Débitos (pagamentos a médicos) são identificados automaticamente</div>
+              </div>
+              <input ref={extratoFileRef} type="file" accept=".csv,.txt" style={{ display: 'none' }}
+                onChange={e => { if (e.target.files[0]) processarExtratoNota(e.target.files[0]) }} />
+
+              {linhasExtrato.length > 0 && (
+                <div className="table-wrap" style={{ marginTop: 14 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', marginBottom: 10, gap: 10 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>Transações importadas ({linhasExtrato.length})</span>
+                    <div style={{ flex: 1 }} />
+                    <button className="btn btn-ghost btn-sm" onClick={() => setLinhasExtrato([])}>Descartar todas</button>
+                    <button className="btn btn-primary btn-sm" onClick={salvarExtratoNota} disabled={loadingExtrato}>
+                      {loadingExtrato ? 'Salvando…' : '✓ Salvar preenchidas'}
+                    </button>
+                  </div>
+                  <table>
+                    <thead><tr>
+                      <th>Data</th><th style={{ textAlign: 'right' }}>Valor</th><th>Descrição</th><th>NF sugerida</th><th>Médico</th><th></th>
+                    </tr></thead>
+                    <tbody>
+                      {linhasExtrato.map((l, i) => (
+                        <tr key={i} style={{ background: l.medico ? '#F0FDF4' : l.ambiguo ? '#FFFBEB' : 'transparent' }}>
+                          <td className="mono">{l.data ? fmtMes(l.data.slice(0,7)) + ' · ' + l.data.split('-')[2] : '—'}</td>
+                          <td className="mono" style={{ textAlign: 'right', fontWeight: 700 }}>{brl(l.valor)}</td>
+                          <td style={{ fontSize: 11, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={l.descricao}>{l.descricao || '—'}</td>
+                          <td className="mono" style={{ fontSize: 11 }}>{l.nf || '—'}</td>
+                          <td>
+                            <input type="text" list="med-datalist" value={l.medico} placeholder={l.ambiguo ? '⚠ vários possíveis' : 'Selecionar médico...'}
+                              onChange={e => atualizarLinhaExtrato(i, 'medico', e.target.value)}
+                              style={{ height: 28, fontSize: 12, width: 200, border: '1px solid var(--border)', borderRadius: 6, padding: '0 8px' }} />
+                          </td>
+                          <td>
+                            <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--n5)', fontSize: 14 }}
+                              onClick={() => removerLinhaExtrato(i)}>✕</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
       {/* MODAL NOTA */}
       <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editando ? 'Editar nota fiscal' : 'Nova nota fiscal'} size="wide"
         footer={<>
@@ -633,7 +877,7 @@ export function Notas({ notas, medicos, onRefresh }) {
         {abaModal === 'dados' && (
           <>
             <div className="form-grid">
-              {[['nf','Nº da NF *','text','00001'],['tomador','Tomador *','text','Unimed…'],['comp','Competência (emissão)','month',''],['mes_recebimento','Mês de recebimento','month',''],['emissao','Data emissão','date',''],['obs','Observações','text','']].map(([k,l,t,p]) => (
+              {[['nf','Nº da NF *','text','00001'],['tomador','Tomador *','text','Unimed…'],['comp','Competência (emissão)','month',''],['mes_recebimento','Mês de recebimento','month',''],['data_pagamento','Data de pagamento (exata)','date',''],['emissao','Data emissão','date',''],['obs','Observações','text','']].map(([k,l,t,p]) => (
                 <div key={k} className="field">
                   <label>{l}</label>
                   <input type={t} value={form[k]} onChange={e => setForm(f=>({...f,[k]:e.target.value}))} placeholder={p}/>
