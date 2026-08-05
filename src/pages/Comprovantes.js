@@ -35,6 +35,7 @@ export function Comprovantes({ comprovantes=[], medicos, notas=[], extratoBancar
     const porTomador = {}
     let totalBruto = 0, totalRepasse = 0, countNotas = 0
 
+    let totalRecebidoReal = 0
     notas.forEach(nota => {
       const mn = nota.medicos_nota?.find(m => m.nome === medicoFat)
       if (!mn) return
@@ -43,13 +44,16 @@ export function Comprovantes({ comprovantes=[], medicos, notas=[], extratoBancar
       const repasse = mn.repasse || bruto * (1 - (mn.retencao_individual || 13) / 100)
       totalBruto += bruto
       totalRepasse += repasse
+      const paga = nota.status === 'Paga ao médico'
+      if (paga) totalRecebidoReal += repasse
 
       // Por mês
       const comp = nota.comp || ''
       if (comp) {
-        if (!porMes[comp]) porMes[comp] = { comp, label: fmtMes(comp), bruto: 0, repasse: 0, count: 0 }
+        if (!porMes[comp]) porMes[comp] = { comp, label: fmtMes(comp), bruto: 0, repasse: 0, recebidoReal: 0, count: 0 }
         porMes[comp].bruto += bruto
         porMes[comp].repasse += repasse
+        if (paga) porMes[comp].recebidoReal += repasse
         porMes[comp].count++
       }
 
@@ -65,22 +69,16 @@ export function Comprovantes({ comprovantes=[], medicos, notas=[], extratoBancar
     // Top tomadores
     const topTomadores = Object.values(porTomador).sort((a,b) => b.bruto - a.bruto).slice(0, 6)
 
-    // ── Recebido REAL, segundo o extrato bancário confirmado (fonte confiável) ──
-    const extratoDoMedico = extratoBancario.filter(e => e.medico_nome === medicoFat)
-    const totalRecebidoReal = extratoDoMedico.reduce((a, e) => a + (e.valor || 0), 0)
-    const porMesComReal = mesesOrdenados.map(m => {
-      const recebidoReal = extratoDoMedico
-        .filter(e => e.data && String(e.data).slice(0, 7) === m.comp)
-        .reduce((a, e) => a + (e.valor || 0), 0)
-      return { ...m, recebidoReal }
-    })
+    // "Recebido real" = regime de caixa: soma do repasse das notas já marcadas
+    // "Paga ao médico". Atualiza na hora que o status muda em Notas Fiscais.
+    const qtdNotasPagas = notas.filter(n => n.medicos_nota?.some(m => m.nome === medicoFat) && n.status === 'Paga ao médico').length
 
     return {
-      porMes: porMesComReal,
-      totais: { bruto: totalBruto, repasse: totalRepasse, count: countNotas, recebidoReal: totalRecebidoReal, qtdTransacoesReal: extratoDoMedico.length },
+      porMes: mesesOrdenados,
+      totais: { bruto: totalBruto, repasse: totalRepasse, count: countNotas, recebidoReal: totalRecebidoReal, qtdTransacoesReal: qtdNotasPagas },
       porTomador: topTomadores
     }
-  }, [notas, medicoFat, extratoBancario])
+  }, [notas, medicoFat])
 
   const medCadastrado = medicos.find(m => m.nome === medicoFat)
 
@@ -224,7 +222,7 @@ export function Comprovantes({ comprovantes=[], medicos, notas=[], extratoBancar
                 {[
                   { bar:'var(--g5)', ic:'var(--g10)', icon:'💰', label:'Total bruto', value: brl(dadosFaturamento.totais.bruto), sub:'Acumulado' },
                   { bar:'var(--blue)', ic:'var(--blue-l)', icon:'📥', label:'Total repasse (devido)', value: brl(dadosFaturamento.totais.repasse), sub:`Após ${medCadastrado?.retencao||13}% retenção` },
-                  { bar:'#16A34A', ic:'#F0FDF4', icon:'✅', label:'Recebido real', value: brl(dadosFaturamento.totais.recebidoReal), sub:`${dadosFaturamento.totais.qtdTransacoesReal} transação(ões) confirmada(s)` },
+                  { bar:'#16A34A', ic:'#F0FDF4', icon:'✅', label:'Recebido real', value: brl(dadosFaturamento.totais.recebidoReal), sub:`${dadosFaturamento.totais.qtdTransacoesReal} nota(s) paga(s)` },
                   { bar:'var(--orange)', ic:'var(--orange-l)', icon:'📄', label:'NFs vinculadas', value: dadosFaturamento.totais.count, sub:'Total de notas' },
                   { bar:'var(--g5)', ic:'var(--g10)', icon:'📊', label:'Meses ativos', value: dadosFaturamento.porMes.length, sub:'Com faturamento' },
                 ].map((k,i) => (
