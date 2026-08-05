@@ -44,20 +44,6 @@ export function Relatorios({ notas, medicos, extratoBancario = [] }) {
     })
   }, [notas, tipo, mes, de, ate])
 
-  // Extrato filtrado pelo mesmo período (usa a data real da transação bancária)
-  const extratoFiltrado = useMemo(() => {
-    return extratoBancario.filter(e => {
-      const mesTx = e.data ? String(e.data).slice(0, 7) : ''
-      if (tipo === 'mes') return mes ? mesTx === mes : true
-      if (tipo === 'intervalo') {
-        if (de && mesTx && mesTx < de) return false
-        if (ate && mesTx && mesTx > ate) return false
-        return true
-      }
-      return true
-    })
-  }, [extratoBancario, tipo, mes, de, ate])
-
   const periodo = tipo === 'todos' ? '(todos os períodos)' : tipo === 'mes' ? `em ${fmtMes(mes)}` : de && ate ? `de ${fmtMes(de)} até ${fmtMes(ate)}` : ''
 
   const faturaram = useMemo(() => {
@@ -68,32 +54,31 @@ export function Relatorios({ notas, medicos, extratoBancario = [] }) {
 
   const naoFaturaram = useMemo(() => medicos.filter(m => !faturaram.has(m.nome)), [medicos, faturaram])
 
+  // "Recebido real" = regime de caixa: soma do repasse só das notas já marcadas "Paga ao médico".
+  // Não depende de extrato importado — atualiza na hora que o status muda na tela de Notas.
   const totais = useMemo(() => {
     const base = notasFiltradas.reduce((a, n) => ({
       bruto: a.bruto + (n.bruto || 0),
       recebido: a.recebido + (n.recebido || 0),
       margem: a.margem + (n.margem || 0),
     }), { bruto: 0, recebido: 0, margem: 0 })
-    const recebidoReal = extratoFiltrado.reduce((a, e) => a + (e.valor || 0), 0)
+    const recebidoReal = notasFiltradas.filter(n => n.status === 'Paga ao médico').reduce((a, n) => a + (n.total_repasse || 0), 0)
     return { ...base, recebidoReal }
-  }, [notasFiltradas, extratoFiltrado])
+  }, [notasFiltradas])
 
-  // Dados por médico: bruto/repasse esperado (das notas) + recebido real (do extrato)
+  // Dados por médico: bruto/repasse esperado (das notas) + recebido real (regime de caixa)
   const porMedico = useMemo(() => {
     const m = {}
     notasFiltradas.forEach(n => {
       n.medicos_nota?.forEach(mn => {
-        if (!m[mn.nome]) m[mn.nome] = { nome: mn.nome, count: 0, bruto: 0, repasse: 0, recebidoReal: 0, qtdTransacoes: 0 }
+        if (!m[mn.nome]) m[mn.nome] = { nome: mn.nome, count: 0, bruto: 0, repasse: 0, recebidoReal: 0 }
         m[mn.nome].count++
         m[mn.nome].bruto += mn.valor_bruto_medico || 0
         m[mn.nome].repasse += mn.repasse || 0
+        if (n.status === 'Paga ao médico') {
+          m[mn.nome].recebidoReal += mn.repasse || 0
+        }
       })
-    })
-    extratoFiltrado.forEach(e => {
-      if (!e.medico_nome) return
-      if (!m[e.medico_nome]) m[e.medico_nome] = { nome: e.medico_nome, count: 0, bruto: 0, repasse: 0, recebidoReal: 0, qtdTransacoes: 0 }
-      m[e.medico_nome].recebidoReal += e.valor || 0
-      m[e.medico_nome].qtdTransacoes++
     })
     let arr = Object.values(m).filter(x => !busca || x.nome.toLowerCase().includes(busca.toLowerCase()))
     arr.sort((a, b) => {
@@ -102,7 +87,7 @@ export function Relatorios({ notas, medicos, extratoBancario = [] }) {
       return b.recebidoReal - a.recebidoReal
     })
     return arr
-  }, [notasFiltradas, extratoFiltrado, busca, ordenarPor])
+  }, [notasFiltradas, busca, ordenarPor])
 
   const top10Chart = useMemo(() =>
     [...porMedico].sort((a, b) => b.recebidoReal - a.recebidoReal).slice(0, 10)
@@ -167,7 +152,7 @@ export function Relatorios({ notas, medicos, extratoBancario = [] }) {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
           <Kpi label="Total emitido" value={brl(totais.bruto)} sub={`${notasFiltradas.length} nota(s)`} />
           <Kpi label="Total devido (repasse)" value={brl(porMedico.reduce((a, m) => a + m.repasse, 0))} sub="segundo as notas" color={BLUE} />
-          <Kpi label="Recebido real" value={brl(totais.recebidoReal)} sub="segundo extrato bancário" color={G.g2} />
+          <Kpi label="Recebido real" value={brl(totais.recebidoReal)} sub="notas marcadas 'Paga ao médico'" color={G.g2} />
           <Kpi label="Médicos ativos" value={faturaram.size} sub={`de ${medicos.length} cadastrados`} />
         </div>
 
