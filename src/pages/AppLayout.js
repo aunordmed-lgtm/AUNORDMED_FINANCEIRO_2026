@@ -25,6 +25,7 @@ import { ConferenciaPDF } from './ConferenciaPDF'
 import { ExtratoOFX } from './ExtratoOFX'
 import { Solicitacoes } from './Solicitacoes'
 import { Gargalos } from './Gargalos'
+import { ImportarExtratoCSV } from './ImportarExtratoCSV'
 
 async function safeQueryCustom(fn) {
   try {
@@ -37,12 +38,12 @@ async function safeQueryCustom(fn) {
 export function AppLayout() {
   const [data, setData] = useState({
     notas: [], medicos: [], tomadores: [], adiantamentos: [],
-    cashbacks: [], comprovantes: [], contas: [], impostos: [], solicitacoes: []
+    cashbacks: [], comprovantes: [], contas: [], impostos: [], solicitacoes: [], extratoBancario: []
   })
   const [loading, setLoading] = useState(true)
 
   const carregar = useCallback(async () => {
-    const [notas, medicos, tomadores, adiantamentos, cashbacks, comprovantes, contas, impostos, solicitacoes] = await Promise.all([
+    const [notas, medicos, tomadores, adiantamentos, cashbacks, comprovantes, contas, impostos, solicitacoes, extratoBancario] = await Promise.all([
       safeQueryCustom(() => supabase.from('notas_fiscais').select('*').order('criado_em', { ascending: false })),
       safeQueryCustom(() => supabase.from('medicos').select('*').order('nome')),
       safeQueryCustom(() => supabase.from('tomadores').select('*').order('nome')),
@@ -52,8 +53,9 @@ export function AppLayout() {
       safeQueryCustom(() => supabase.from('contas_pagar_receber').select('*').order('vencimento')),
       safeQueryCustom(() => supabase.from('impostos').select('*').order('competencia', { ascending: false })),
       safeQueryCustom(() => supabase.from('solicitacoes_medicos').select('*').order('criado_em', { ascending: false })),
+      safeQueryCustom(() => supabase.from('extrato_bancario').select('*').order('data', { ascending: false })),
     ])
-    setData({ notas, medicos, tomadores, adiantamentos, cashbacks, comprovantes, contas, impostos, solicitacoes })
+    setData({ notas, medicos, tomadores, adiantamentos, cashbacks, comprovantes, contas, impostos, solicitacoes, extratoBancario })
     setLoading(false)
   }, [])
 
@@ -90,6 +92,7 @@ export function AppLayout() {
           <Route path="/importacao" element={<ImportacaoNF {...props} />} />
           <Route path="/solicitacoes" element={<Solicitacoes {...props} />} />
           <Route path="/gargalos" element={<Gargalos {...props} />} />
+          <Route path="/importar-extrato" element={<ImportarExtratoCSV {...props} />} />
           <Route path="/pendencias" element={<Pendencias {...props} />} />
           <Route path="/medicos" element={<Medicos {...props} />} />
           <Route path="/tomadores" element={<Tomadores {...props} />} />
