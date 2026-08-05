@@ -455,7 +455,7 @@ function AbaExtratoOFX({ notas = [], onRefresh }) {
   )
 }
 
-export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomadores = [], onRefresh }) {
+export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomadores = [], extratoBancario = [], onRefresh }) {
   const [aba, setAba] = useState('caixa')
   const [fMedico, setFMedico] = useState('')
   const [fCompDe, setFCompDe] = useState('')
@@ -475,6 +475,14 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
     notas.forEach(n => n.tomador && s.add(n.tomador))
     return [...s].sort()
   }, [tomadores, notas])
+
+  // Mapa nf -> {tomador, comp} pra conseguir filtrar o extrato bancário (que só guarda nf)
+  // pelos mesmos filtros de tomador/período aplicados às notas.
+  const notaPorNf = useMemo(() => {
+    const m = {}
+    notas.forEach(n => { if (n.nf) m[n.nf] = n })
+    return m
+  }, [notas])
 
   const linhas = useMemo(() => {
     const out = []
@@ -497,10 +505,22 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
     return out
   }, [notas, fMedico, fCompDe, fCompAte, fDimensao, fTomador, fStatus])
 
+  // Extrato bancário confirmado, respeitando os mesmos filtros (médico direto; tomador/período via NF quando disponível)
+  const extratoFiltrado = useMemo(() => {
+    return extratoBancario.filter(e => {
+      if (fMedico && e.medico_nome !== fMedico) return false
+      const notaRef = e.nf ? notaPorNf[e.nf] : null
+      if (fTomador && notaRef && notaRef.tomador !== fTomador) return false
+      const mesTransacao = e.data ? String(e.data).slice(0, 7) : ''
+      if (fCompDe && mesTransacao && mesTransacao < fCompDe) return false
+      if (fCompAte && mesTransacao && mesTransacao > fCompAte) return false
+      return true
+    })
+  }, [extratoBancario, fMedico, fTomador, fCompDe, fCompAte, notaPorNf])
 
   const totalBruto = linhas.reduce((a, l) => a + l.bruto, 0)
   const totalDevido = linhas.reduce((a, l) => a + l.repasse, 0)
-  const totalPago = linhas.filter(l => l.status === 'Paga ao médico').reduce((a, l) => a + l.repasse, 0)
+  const totalPago = extratoFiltrado.reduce((a, e) => a + (e.valor || 0), 0)
   const diferenca = totalPago - totalDevido
 
   const porMedico = useMemo(() => {
@@ -510,13 +530,16 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
       m[l.medico].qtdNotas++
       m[l.medico].bruto += l.bruto
       m[l.medico].devido += l.repasse
-      if (l.status === 'Paga ao médico') {
-        m[l.medico].qtdPagas++
-        m[l.medico].pago += l.repasse
-      }
+    })
+    extratoFiltrado.forEach(e => {
+      const nome = e.medico_nome
+      if (!nome) return
+      if (!m[nome]) m[nome] = { medico: nome, qtdNotas: 0, qtdPagas: 0, bruto: 0, devido: 0, pago: 0 }
+      m[nome].pago += e.valor || 0
+      m[nome].qtdPagas++
     })
     return Object.values(m).sort((a, b) => a.medico.localeCompare(b.medico))
-  }, [linhas])
+  }, [linhas, extratoFiltrado])
 
   function limparFiltros() { setFMedico(''); setFCompDe(''); setFCompAte(''); setFDimensao('emissao'); setFTomador(''); setFStatus('') }
 
@@ -605,7 +628,7 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 16 }}>
               <Kpi label="Total bruto" value={`R$ ${brl(totalBruto)}`} sub="valor emitido nas notas" />
               <Kpi label="Total devido (repasse)" value={`R$ ${brl(totalDevido)}`} sub="segundo as notas fiscais" />
-              <Kpi label="Total pago (caixa)" value={`R$ ${brl(totalPago)}`} sub="notas marcadas 'Paga ao médico'" color={G.g2} />
+              <Kpi label="Total pago (caixa)" value={`R$ ${brl(totalPago)}`} sub="segundo extrato bancário confirmado" color={G.g2} />
               <Kpi label="Diferença" value={`${diferenca >= 0 ? '' : '-'}R$ ${brl(Math.abs(diferenca))}`} sub="pago − devido" color={Math.abs(diferenca) < 0.01 ? GRAY[3] : diferenca > 0 ? G.g2 : RED} />
             </div>
 
@@ -618,7 +641,7 @@ export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomad
                   <thead><tr style={{ background: G.g1 }}>
                     <th style={thStyle}>Médico</th>
                     <th style={{ ...thStyle, textAlign: 'center' }}>Nº notas</th>
-                    <th style={{ ...thStyle, textAlign: 'center' }}>Nº pagas</th>
+                    <th style={{ ...thStyle, textAlign: 'center' }} title="Nº de transações do extrato bancário confirmadas para esse médico">Nº confirmadas</th>
                     <th style={{ ...thStyle, textAlign: 'right' }}>Bruto</th>
                     <th style={{ ...thStyle, textAlign: 'right' }}>Devido (repasse)</th>
                     <th style={{ ...thStyle, textAlign: 'right' }}>Pago (caixa)</th>
