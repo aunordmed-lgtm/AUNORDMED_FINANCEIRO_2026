@@ -7,11 +7,6 @@ const fmtMes = m => {
   const ms = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
   return `${ms[+mo - 1]}/${y}`
 }
-const fmtDt = d => {
-  if (!d) return '—'
-  const p = d.split('T')[0].split('-')
-  return `${p[2]}/${p[1]}/${p[0]}`
-}
 
 const G = { g1: '#0D3D20', g2: '#145C30', g3: '#1A7A3E', g4: '#22994D', g6: '#A8DCBA', g7: '#E8F5ED' }
 const GRAY = { 0: '#0F172A', 1: '#1E293B', 2: '#475569', 3: '#94A3B8', 5: '#E2E8F0', 6: '#F1F5F9' }
@@ -25,7 +20,6 @@ const thStyle = { padding: '10px 14px', textAlign: 'left', fontSize: 9, fontWeig
 const tdStyle = { padding: '10px 14px', borderBottom: '1px solid ' + GRAY[6], fontSize: 12.5, whiteSpace: 'nowrap' }
 const btnPrimary = { height: 38, padding: '0 16px', borderRadius: 10, border: 'none', background: G.g3, color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer' }
 const btnGhost = { height: 38, padding: '0 16px', borderRadius: 10, border: '1px solid #D4E6DA', background: GRAY[6], color: GRAY[1], fontSize: 13, fontWeight: 600, cursor: 'pointer' }
-const badge = (bg, color, border) => ({ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 10px', borderRadius: 99, fontSize: 10.5, fontWeight: 700, background: bg, color, border: '1px solid ' + border })
 
 function Kpi({ label, value, sub, color }) {
   return (
@@ -37,7 +31,7 @@ function Kpi({ label, value, sub, color }) {
   )
 }
 
-export function RegimeCaixa({ notas = [], comprovantes = [], medicos = [], tomadores = [], extratoBancario = [], onRefresh }) {
+export function RegimeCaixa({ notas = [], medicos = [], tomadores = [] }) {
   const [fMedico, setFMedico] = useState('')
   const [fCompDe, setFCompDe] = useState('')
   const [fCompAte, setFCompAte] = useState('')
