@@ -591,17 +591,35 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
   // Quando uma nota é marcada como "Paga ao médico", garante que cada médico
   // dela tenha um lançamento no extrato_bancario (data + valor do repasse).
   // Não duplica se já existir um lançamento pra essa NF + médico.
+  // Monta a data de referência mais fiel possível pra um pagamento, SEM nunca
+  // inventar "hoje" — se não houver informação real, usa a competência (mais
+  // próximo da verdade que uma data arbitrária) ou deixa em branco.
+  function dataReferenciaPagamento(nota) {
+    if (nota.data_pagamento) return nota.data_pagamento
+    if (nota.mes_recebimento) return `${nota.mes_recebimento}-01`
+    if (nota.comp) return `${nota.comp}-01`
+    return null
+  }
+
+  // Considera duplicata só quando NF + médico + data + valor batem exatamente —
+  // isso evita duplicar de verdade, mas ainda permite duas notas diferentes que
+  // por acaso reaproveitam o mesmo número de NF em meses diferentes.
+  function existeNoExtrato(lista, { nf, medico, data, valor }) {
+    return lista.some(e =>
+      e.nf === nf && e.medico_nome === medico && e.data === data && Math.abs((e.valor || 0) - valor) <= 0.01
+    )
+  }
+
   async function sincronizarExtratoDaNota(nota) {
     if (!nota || nota.status !== 'Paga ao médico' || !nota.medicos_nota?.length) return
-    const dataRef = nota.data_pagamento
-      || (nota.mes_recebimento ? `${nota.mes_recebimento}-01` : new Date().toISOString().split('T')[0])
+    const dataRef = dataReferenciaPagamento(nota)
     for (const mn of nota.medicos_nota) {
-      const jaExiste = extratoBancario.some(e => e.nf === nota.nf && e.medico_nome === mn.nome)
-      if (jaExiste) continue
+      const valor = mn.repasse || 0
+      if (existeNoExtrato(extratoBancario, { nf: nota.nf, medico: mn.nome, data: dataRef, valor })) continue
       try {
         await supabase.from('extrato_bancario').insert({
           data: dataRef,
-          valor: mn.repasse || 0,
+          valor,
           medico_nome: mn.nome,
           nf: nota.nf,
           descricao: '(gerado automaticamente ao marcar a nota como paga)',
@@ -617,27 +635,28 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
   async function sincronizarTodasNotasPagas() {
     setSincronizandoExtrato(true)
     const notasPagas = notas.filter(n => n.status === 'Paga ao médico' && n.medicos_nota?.length)
-    let criados = 0, jaExistiam = 0
-    const criadosNesteLote = new Set()
+    let criados = 0, jaExistiam = 0, semData = 0
+    const criadosNesteLote = []
     for (const nota of notasPagas) {
-      const dataRef = nota.data_pagamento
-        || (nota.mes_recebimento ? `${nota.mes_recebimento}-01` : new Date().toISOString().split('T')[0])
+      const dataRef = dataReferenciaPagamento(nota)
       for (const mn of nota.medicos_nota) {
-        const chave = `${nota.nf}|${mn.nome}`
-        const jaExisteNoBanco = extratoBancario.some(e => e.nf === nota.nf && e.medico_nome === mn.nome)
-        if (jaExisteNoBanco || criadosNesteLote.has(chave)) { jaExistiam++; continue }
+        const valor = mn.repasse || 0
+        const chaveLote = { nf: nota.nf, medico: mn.nome, data: dataRef, valor }
+        const jaExisteNoBanco = existeNoExtrato(extratoBancario, chaveLote) || existeNoExtrato(criadosNesteLote, chaveLote)
+        if (jaExisteNoBanco) { jaExistiam++; continue }
+        if (!dataRef) semData++
         try {
           await supabase.from('extrato_bancario').insert({
-            data: dataRef, valor: mn.repasse || 0, medico_nome: mn.nome, nf: nota.nf,
+            data: dataRef, valor, medico_nome: mn.nome, nf: nota.nf,
             descricao: '(sincronizado retroativamente de notas já pagas)', conferido: true,
           })
-          criadosNesteLote.add(chave)
+          criadosNesteLote.push({ nf: nota.nf, medico_nome: mn.nome, data: dataRef, valor })
           criados++
         } catch (e) {}
       }
     }
     setSincronizandoExtrato(false)
-    toast(`${criados} lançamento(s) criado(s) no extrato · ${jaExistiam} já existiam`)
+    toast(`${criados} lançamento(s) criado(s) · ${jaExistiam} já existiam${semData ? ` · ${semData} sem data conhecida (preencher manualmente)` : ''}`)
     onRefresh()
   }
 
