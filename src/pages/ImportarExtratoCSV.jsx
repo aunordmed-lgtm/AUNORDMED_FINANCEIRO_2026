@@ -1,7 +1,6 @@
 import { useState, useMemo, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useToast } from '../components/Toast'
-import { useAuth } from '../contexts/AuthContext'
 
 const brl = v => Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const fmtDt = d => {
@@ -154,8 +153,6 @@ function sugerirMedicos(linhasCsv, notas, medicos) {
 
 export function ImportarExtratoCSV({ notas = [], medicos = [], extratoBancario = [], onRefresh }) {
   const { toast } = useToast()
-  const { user } = useAuth()
-  const usuarioAtual = user?.email || 'desconhecido'
   const [aba, setAba] = useState('importar') // 'importar' | 'relatorio'
   const [linhas, setLinhas] = useState([])
   const [loading, setLoading] = useState(false)
@@ -198,14 +195,6 @@ export function ImportarExtratoCSV({ notas = [], medicos = [], extratoBancario =
     setLinhas(prev => prev.filter((_, j) => j !== i))
   }
 
-  async function registrarLog(extratoId, acao, dadosAntes, dadosDepois) {
-    try {
-      await supabase.from('extrato_bancario_log').insert({
-        extrato_id: extratoId, acao, dados_antes: dadosAntes || null, dados_depois: dadosDepois || null, usuario: usuarioAtual,
-      })
-    } catch (e) { /* auditoria não deve travar a operação principal */ }
-  }
-
   async function salvarTudo() {
     const validas = linhas.filter(l => l.medico)
     if (!validas.length) { toast('Preencha o médico de pelo menos uma linha antes de salvar.', 'error'); return }
@@ -213,14 +202,11 @@ export function ImportarExtratoCSV({ notas = [], medicos = [], extratoBancario =
     let sucesso = 0, falhas = 0
     for (const l of validas) {
       try {
-        const payload = {
+        const { error } = await supabase.from('extrato_bancario').insert({
           data: l.data || null, valor: l.valor, descricao: l.descricao || null,
           medico_nome: l.medico, nf: l.nf || null, conferido: true,
-          origem: 'csv', criado_por: usuarioAtual,
-        }
-        const { data: inserida, error } = await supabase.from('extrato_bancario').insert(payload).select().single()
+        })
         if (error) throw error
-        await registrarLog(inserida?.id, 'criado', null, payload)
         sucesso++
       } catch (e) { falhas++ }
     }
@@ -233,7 +219,6 @@ export function ImportarExtratoCSV({ notas = [], medicos = [], extratoBancario =
   async function excluirSalva(item) {
     if (!window.confirm('Excluir esta transação do extrato salvo?')) return
     await supabase.from('extrato_bancario').delete().eq('id', item.id)
-    await registrarLog(item.id, 'excluido', item, null)
     toast('Removida.')
     if (onRefresh) onRefresh()
   }
@@ -253,12 +238,10 @@ export function ImportarExtratoCSV({ notas = [], medicos = [], extratoBancario =
     const payload = {
       data: editForm.data || null, valor: parseFloat(editForm.valor) || 0, medico_nome: editForm.medico_nome,
       nf: editForm.nf || null, descricao: editForm.descricao || null,
-      atualizado_em: new Date().toISOString(), atualizado_por: usuarioAtual,
     }
     try {
       const { error } = await supabase.from('extrato_bancario').update(payload).eq('id', itemOriginal.id)
       if (error) throw error
-      await registrarLog(itemOriginal.id, 'editado', itemOriginal, { ...itemOriginal, ...payload })
       toast('Transação corrigida!')
       setEditandoId(null)
       if (onRefresh) onRefresh()
@@ -274,11 +257,9 @@ export function ImportarExtratoCSV({ notas = [], medicos = [], extratoBancario =
       const payload = {
         data: formManual.data || null, valor: parseFloat(formManual.valor) || 0, medico_nome: formManual.medico_nome,
         nf: formManual.nf || null, descricao: formManual.descricao || '(lançamento manual)', conferido: true,
-        origem: 'manual', criado_por: usuarioAtual,
       }
-      const { data: inserida, error } = await supabase.from('extrato_bancario').insert(payload).select().single()
+      const { error } = await supabase.from('extrato_bancario').insert(payload)
       if (error) throw error
-      await registrarLog(inserida?.id, 'criado', null, payload)
       toast('Pagamento manual registrado!')
       setModalManual(false)
       setFormManual({ data: '', medico_nome: '', valor: '', nf: '', descricao: '' })
@@ -535,7 +516,6 @@ export function ImportarExtratoCSV({ notas = [], medicos = [], extratoBancario =
                               <th style={{ ...thStyle, background: 'transparent', color: GRAY[2], textAlign: 'right' }}>Valor</th>
                               <th style={{ ...thStyle, background: 'transparent', color: GRAY[2] }}>NF</th>
                               <th style={{ ...thStyle, background: 'transparent', color: GRAY[2] }}>Descrição</th>
-                              <th style={{ ...thStyle, background: 'transparent', color: GRAY[2] }}>Origem</th>
                               <th style={{ ...thStyle, background: 'transparent', color: GRAY[2] }}></th>
                             </tr></thead>
                             <tbody>
@@ -548,7 +528,6 @@ export function ImportarExtratoCSV({ notas = [], medicos = [], extratoBancario =
                                     <td style={tdStyle}>
                                       <input type="text" list="ie-med-datalist" value={editForm.medico_nome} onChange={e => setEditForm(f => ({ ...f, medico_nome: e.target.value }))} style={{ ...inputStyle, height: 30, width: 180, fontSize: 11 }} placeholder="Médico" />
                                     </td>
-                                    <td style={{ ...tdStyle, fontSize: 10, color: GRAY[3] }}>{it.origem || 'csv'}</td>
                                     <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
                                       <button onClick={() => salvarEdicao(it)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: G.g2, fontSize: 12, fontWeight: 700, marginRight: 8 }}>✓ Salvar</button>
                                       <button onClick={cancelarEdicao} style={{ background: 'none', border: 'none', cursor: 'pointer', color: GRAY[3], fontSize: 12 }}>Cancelar</button>
@@ -560,12 +539,6 @@ export function ImportarExtratoCSV({ notas = [], medicos = [], extratoBancario =
                                     <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace' }}>R$ {brl(it.valor)}</td>
                                     <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{it.nf || '—'}</td>
                                     <td style={{ ...tdStyle, whiteSpace: 'normal', maxWidth: 260 }}>{it.descricao || '—'}</td>
-                                    <td style={{ ...tdStyle, fontSize: 10 }}>
-                                      <span style={badge(it.origem === 'manual' ? '#FFFBEB' : G.g7, it.origem === 'manual' ? ORANGE : G.g2, it.origem === 'manual' ? '#FDE68A' : G.g6)}>
-                                        {it.origem === 'manual' ? 'Manual' : 'CSV'}
-                                      </span>
-                                      {it.atualizado_em && <div style={{ color: GRAY[3], marginTop: 2 }}>editado por {it.atualizado_por}</div>}
-                                    </td>
                                     <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
                                       <button onClick={() => abrirEdicao(it)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: G.g3, fontSize: 12, marginRight: 10 }}>✏️ Corrigir</button>
                                       <button onClick={() => excluirSalva(it)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: RED, fontSize: 12 }}>✕ excluir</button>
