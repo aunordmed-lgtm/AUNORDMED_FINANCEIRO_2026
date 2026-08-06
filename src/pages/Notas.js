@@ -148,6 +148,9 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
   const [fPlanCompAte, setFPlanCompAte] = useState('')
   const [fPlanCaixa, setFPlanCaixa] = useState('') // '' | 'pago' | 'pendente'
   const [fPlanMedico, setFPlanMedico] = useState('')
+  const [editandoPlanId, setEditandoPlanId] = useState(null)
+  const [editFormPlan, setEditFormPlan] = useState({ comp: '', nf: '', tomador: '', medico: '', bruto: '', retencao: '', status: '', dataPagamento: '' })
+  const [salvandoPlan, setSalvandoPlan] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
   const [abaModal, setAbaModal] = useState('dados') // dados | importar
   const [editando, setEditando] = useState(null)
@@ -217,10 +220,10 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
       const pago = n.status === 'Paga ao médico'
       if (fPlanCaixa === 'pago' && !pago) return
       if (fPlanCaixa === 'pendente' && pago) return
-      ;(n.medicos_nota || []).forEach(mn => {
+      ;(n.medicos_nota || []).forEach((mn, idx) => {
         if (fPlanMedico && mn.nome !== fPlanMedico) return
         out.push({
-          medico: mn.nome, notaId: n.id, nf: n.nf, tomador: n.tomador, comp: n.comp,
+          medico: mn.nome, medicoIndex: idx, notaId: n.id, nf: n.nf, tomador: n.tomador, comp: n.comp,
           bruto: mn.valor_bruto_medico || 0, retencao: mn.retencao_individual || 13,
           repasse: mn.repasse || 0, status: n.status, pago,
           dataPagamento: n.data_pagamento || null,
@@ -675,6 +678,60 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
   // Sincronização retroativa: varre TODAS as notas já marcadas "Paga ao médico"
   // (inclusive as que já estavam assim antes dessa funcionalidade existir) e cria
   // no extrato_bancario o que estiver faltando, sem duplicar o que já existe.
+  function abrirEdicaoPlanilha(linha) {
+    setEditandoPlanId(`${linha.notaId}-${linha.medicoIndex}`)
+    setEditFormPlan({
+      comp: linha.comp || '', nf: linha.nf || '', tomador: linha.tomador || '',
+      medico: linha.medico || '', bruto: String(linha.bruto ?? ''), retencao: String(linha.retencao ?? 13),
+      status: linha.status || 'Emitida', dataPagamento: linha.dataPagamento || '',
+    })
+  }
+
+  function cancelarEdicaoPlanilha() { setEditandoPlanId(null) }
+
+  async function salvarEdicaoPlanilha(linha) {
+    if (!editFormPlan.medico || editFormPlan.bruto === '') { toast('Médico e valor bruto são obrigatórios.', 'error'); return }
+    const nota = notas.find(n => n.id === linha.notaId)
+    if (!nota) { toast('Nota não encontrada.', 'error'); return }
+    setSalvandoPlan(true)
+    try {
+      const novoBruto = parseFloat(editFormPlan.bruto) || 0
+      const novaRetencao = parseFloat(editFormPlan.retencao) || 13
+      const novoRepasse = novoBruto * (1 - novaRetencao / 100)
+      const medicosAtualizados = [...(nota.medicos_nota || [])]
+      medicosAtualizados[linha.medicoIndex] = {
+        ...medicosAtualizados[linha.medicoIndex],
+        nome: editFormPlan.medico,
+        valor_bruto_medico: novoBruto,
+        retencao_individual: novaRetencao,
+        repasse: novoRepasse,
+      }
+      const totalRepasse = medicosAtualizados.reduce((a, m) => a + (m.repasse || 0), 0)
+      const payloadNota = {
+        comp: editFormPlan.comp || null,
+        nf: editFormPlan.nf || null,
+        tomador: editFormPlan.tomador || null,
+        status: editFormPlan.status,
+        data_pagamento: editFormPlan.dataPagamento || null,
+        medicos_nota: medicosAtualizados,
+        total_repasse: totalRepasse,
+        nomes_medicos: medicosAtualizados.map(m => m.nome).join(', '),
+      }
+      const { error } = await supabase.from('notas_fiscais').update(payloadNota).eq('id', nota.id)
+      if (error) throw error
+      // Se virou "Paga ao médico", já sincroniza o extrato bancário também
+      if (payloadNota.status === 'Paga ao médico') {
+        await sincronizarExtratoDaNota({ ...nota, ...payloadNota })
+      }
+      toast('Linha atualizada!')
+      setEditandoPlanId(null)
+      onRefresh()
+    } catch (e) {
+      toast('Erro ao salvar: ' + e.message, 'error')
+    }
+    setSalvandoPlan(false)
+  }
+
   async function sincronizarTodasNotasPagas() {
     setSincronizandoExtrato(true)
     const notasPagas = notas.filter(n => n.status === 'Paga ao médico' && n.medicos_nota?.length)
@@ -1230,21 +1287,83 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
                   </span>
                 </div>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ background: 'var(--n10)' }}>
+                      {['Competência','NF','Tomador','Bruto','Ret.%','Repasse','Médico','Status','Data pgto',''].map((h,hi) => (
+                        <th key={hi} style={{ padding: '5px 8px', fontSize: 9, fontWeight: 700, color: 'var(--n5)', textTransform: 'uppercase', letterSpacing: '.3px', textAlign: hi>=3 && hi<=5 ? 'right' : 'left' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
                   <tbody>
-                    {g.linhas.map((l, li) => (
-                      <tr key={li} style={{ background: l.pago ? '#F0FDF4' : 'transparent', borderBottom: '1px solid var(--n9)' }}>
-                        <td style={{ padding: '7px 16px', fontSize: 11.5, width: 90 }} className="mono">{fmtMes(l.comp)}</td>
-                        <td style={{ padding: '7px 8px', fontSize: 11.5, width: 90 }} className="mono">{l.nf || '—'}</td>
-                        <td style={{ padding: '7px 8px', fontSize: 11.5 }}>{l.tomador || '—'}</td>
-                        <td style={{ padding: '7px 8px', fontSize: 11.5, textAlign: 'right', width: 100 }} className="mono">{brl(l.bruto)}</td>
-                        <td style={{ padding: '7px 8px', fontSize: 11.5, textAlign: 'center', width: 60, color: 'var(--n4)' }} className="mono">{l.retencao}%</td>
-                        <td style={{ padding: '7px 8px', fontSize: 11.5, textAlign: 'right', width: 100, fontWeight: 700, color: 'var(--blue)' }} className="mono">{brl(l.repasse)}</td>
-                        <td style={{ padding: '7px 8px', fontSize: 11, textAlign: 'center', width: 130 }}>
-                          <span className={`badge ${l.pago ? 'badge-ok' : l.status === 'Recebida' ? 'badge-rec' : 'badge-emit'}`}>{l.status}</span>
-                        </td>
-                        <td style={{ padding: '7px 16px', fontSize: 11, width: 90 }} className="mono">{l.dataPagamento ? l.dataPagamento.split('-').reverse().join('/') : '—'}</td>
-                      </tr>
-                    ))}
+                    {g.linhas.map((l, li) => {
+                      const idKey = `${l.notaId}-${l.medicoIndex}`
+                      const editando = editandoPlanId === idKey
+                      if (editando) {
+                        return (
+                          <tr key={li} style={{ background: '#FFFBEB', borderBottom: '1px solid var(--n9)' }}>
+                            <td style={{ padding: '5px 8px' }}>
+                              <input type="month" value={editFormPlan.comp} onChange={e => setEditFormPlan(f => ({ ...f, comp: e.target.value }))}
+                                style={{ height: 28, fontSize: 11, width: 110, border: '1px solid var(--border)', borderRadius: 6, padding: '0 6px' }} />
+                            </td>
+                            <td style={{ padding: '5px 8px' }}>
+                              <input type="text" value={editFormPlan.nf} onChange={e => setEditFormPlan(f => ({ ...f, nf: e.target.value }))}
+                                style={{ height: 28, fontSize: 11, width: 80, border: '1px solid var(--border)', borderRadius: 6, padding: '0 6px' }} />
+                            </td>
+                            <td style={{ padding: '5px 8px' }}>
+                              <input type="text" value={editFormPlan.tomador} onChange={e => setEditFormPlan(f => ({ ...f, tomador: e.target.value }))}
+                                style={{ height: 28, fontSize: 11, width: 160, border: '1px solid var(--border)', borderRadius: 6, padding: '0 6px' }} />
+                            </td>
+                            <td style={{ padding: '5px 8px' }}>
+                              <input type="number" step="0.01" value={editFormPlan.bruto} onChange={e => setEditFormPlan(f => ({ ...f, bruto: e.target.value }))}
+                                style={{ height: 28, fontSize: 11, width: 90, textAlign: 'right', border: '1px solid var(--border)', borderRadius: 6, padding: '0 6px' }} />
+                            </td>
+                            <td style={{ padding: '5px 8px' }}>
+                              <input type="number" step="0.01" value={editFormPlan.retencao} onChange={e => setEditFormPlan(f => ({ ...f, retencao: e.target.value }))}
+                                style={{ height: 28, fontSize: 11, width: 55, textAlign: 'center', border: '1px solid var(--border)', borderRadius: 6, padding: '0 4px' }} />
+                            </td>
+                            <td style={{ padding: '5px 8px' }}>
+                              <input type="text" list="med-datalist" value={editFormPlan.medico} onChange={e => setEditFormPlan(f => ({ ...f, medico: e.target.value }))}
+                                placeholder="Médico" style={{ height: 28, fontSize: 11, width: 170, border: '1px solid var(--border)', borderRadius: 6, padding: '0 6px' }} />
+                            </td>
+                            <td style={{ padding: '5px 8px' }}>
+                              <select value={editFormPlan.status} onChange={e => setEditFormPlan(f => ({ ...f, status: e.target.value }))}
+                                style={{ height: 28, fontSize: 11, width: 120, border: '1px solid var(--border)', borderRadius: 6, padding: '0 4px', fontFamily: 'var(--sans)' }}>
+                                <option value="Emitida">Emitida</option>
+                                <option value="Recebida">Recebida</option>
+                                <option value="Paga ao médico">Paga ao médico</option>
+                              </select>
+                            </td>
+                            <td style={{ padding: '5px 8px' }}>
+                              <input type="date" value={editFormPlan.dataPagamento} onChange={e => setEditFormPlan(f => ({ ...f, dataPagamento: e.target.value }))}
+                                style={{ height: 28, fontSize: 11, width: 130, border: '1px solid var(--border)', borderRadius: 6, padding: '0 6px' }} />
+                            </td>
+                            <td style={{ padding: '5px 12px', whiteSpace: 'nowrap' }}>
+                              <button onClick={() => salvarEdicaoPlanilha(l)} disabled={salvandoPlan} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--g3)', fontSize: 12, fontWeight: 700, marginRight: 8 }}>
+                                {salvandoPlan ? '…' : '✓ Salvar'}
+                              </button>
+                              <button onClick={cancelarEdicaoPlanilha} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--n5)', fontSize: 12 }}>Cancelar</button>
+                            </td>
+                          </tr>
+                        )
+                      }
+                      return (
+                        <tr key={li} style={{ background: l.pago ? '#F0FDF4' : 'transparent', borderBottom: '1px solid var(--n9)' }}>
+                          <td style={{ padding: '7px 16px', fontSize: 11.5, width: 90 }} className="mono">{fmtMes(l.comp)}</td>
+                          <td style={{ padding: '7px 8px', fontSize: 11.5, width: 90 }} className="mono">{l.nf || '—'}</td>
+                          <td style={{ padding: '7px 8px', fontSize: 11.5 }}>{l.tomador || '—'}</td>
+                          <td style={{ padding: '7px 8px', fontSize: 11.5, textAlign: 'right', width: 100 }} className="mono">{brl(l.bruto)}</td>
+                          <td style={{ padding: '7px 8px', fontSize: 11.5, textAlign: 'center', width: 60, color: 'var(--n4)' }} className="mono">{l.retencao}%</td>
+                          <td style={{ padding: '7px 8px', fontSize: 11.5, textAlign: 'right', width: 100, fontWeight: 700, color: 'var(--blue)' }} className="mono">{brl(l.repasse)}</td>
+                          <td style={{ padding: '7px 8px', fontSize: 11, textAlign: 'center', width: 130 }}>
+                            <span className={`badge ${l.pago ? 'badge-ok' : l.status === 'Recebida' ? 'badge-rec' : 'badge-emit'}`}>{l.status}</span>
+                          </td>
+                          <td style={{ padding: '7px 16px', fontSize: 11, width: 90 }} className="mono">{l.dataPagamento ? l.dataPagamento.split('-').reverse().join('/') : '—'}</td>
+                          <td style={{ padding: '7px 12px', width: 80 }}>
+                            <button onClick={() => abrirEdicaoPlanilha(l)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--g3)', fontSize: 11.5 }}>✏️ Editar</button>
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
