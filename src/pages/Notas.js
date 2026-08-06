@@ -180,6 +180,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
   const [linhasExtrato, setLinhasExtrato] = useState([])
   const [loadingExtrato, setLoadingExtrato] = useState(false)
   const [sincronizandoExtrato, setSincronizandoExtrato] = useState(false)
+  const [corrigindoStatus, setCorrigindoStatus] = useState(false)
   const [buscaExtratoConfirmado, setBuscaExtratoConfirmado] = useState('')
   const [expandidoExtratoConfirmado, setExpandidoExtratoConfirmado] = useState(null)
   const [editandoExtratoId, setEditandoExtratoId] = useState(null)
@@ -579,7 +580,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
         const datasDaNota = validas.filter(l => l.notaId === notaId).map(l => l.data).filter(Boolean)
         const dataMaisRecente = datasDaNota.sort().slice(-1)[0] || null
         try {
-          await supabase.from('notas_fiscais').update({ data_pagamento: dataMaisRecente, status: nota.status === 'Emitida' ? 'Recebida' : nota.status }).eq('id', notaId)
+          await supabase.from('notas_fiscais').update({ data_pagamento: dataMaisRecente, status: 'Paga ao médico' }).eq('id', notaId)
         } catch (e) {}
       }
     }
@@ -760,6 +761,38 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
     onRefresh()
   }
 
+  // Corrige o histórico: usa o que já está importado no extrato_bancario
+  // (de importações anteriores, mesmo antes da correção do bug de status) pra
+  // marcar retroativamente as notas como "Paga ao médico" quando TODOS os
+  // médicos daquela nota já têm um lançamento correspondente no extrato.
+  // Não precisa reimportar CSV nenhum — usa o que já está salvo.
+  async function corrigirStatusUsandoExtratoExistente() {
+    setCorrigindoStatus(true)
+    const candidatas = notas.filter(n => n.status !== 'Paga ao médico' && n.medicos_nota?.length)
+    let corrigidas = 0
+    for (const nota of candidatas) {
+      const medicosComMatch = []
+      for (const mn of nota.medicos_nota) {
+        const match = extratoBancario.find(e =>
+          (e.nf && e.nf === nota.nf && e.medico_nome === mn.nome) ||
+          (!e.nf && e.medico_nome === mn.nome && Math.abs((e.valor || 0) - (mn.repasse || 0)) <= 0.02)
+        )
+        if (match) medicosComMatch.push(match)
+      }
+      if (medicosComMatch.length > 0 && medicosComMatch.length === nota.medicos_nota.length) {
+        const datas = medicosComMatch.map(m => m.data).filter(Boolean).sort()
+        const dataRef = datas[datas.length - 1] || nota.data_pagamento || null
+        try {
+          await supabase.from('notas_fiscais').update({ status: 'Paga ao médico', data_pagamento: dataRef }).eq('id', nota.id)
+          corrigidas++
+        } catch (e) {}
+      }
+    }
+    setCorrigindoStatus(false)
+    toast(`${corrigidas} nota(s) corrigida(s) para "Paga ao médico", usando o extrato já importado`)
+    onRefresh()
+  }
+
   const alterarStatus = async (id, status) => {
     await supabase.from('notas_fiscais').update({ status }).eq('id', id)
     if (status === 'Paga ao médico') {
@@ -842,7 +875,11 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
         ))}
         {aba === 'lista' && (
           <>
-            <button className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto' }} onClick={sincronizarTodasNotasPagas} disabled={sincronizandoExtrato}
+            <button className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto' }} onClick={corrigirStatusUsandoExtratoExistente} disabled={corrigindoStatus}
+              title="Usa o extrato bancário já importado (mesmo de antes) pra corrigir retroativamente o status das notas que já foram pagas mas ficaram marcadas errado">
+              {corrigindoStatus ? '🔧 Corrigindo…' : '🔧 Corrigir status com extrato já importado'}
+            </button>
+            <button className="btn btn-ghost btn-sm" onClick={sincronizarTodasNotasPagas} disabled={sincronizandoExtrato}
               title="Cria no extrato bancário os lançamentos que faltam para notas já marcadas como 'Paga ao médico' antes dessa sincronização existir">
               {sincronizandoExtrato ? '🔄 Sincronizando…' : '🔄 Sincronizar extrato com notas pagas'}
             </button>
