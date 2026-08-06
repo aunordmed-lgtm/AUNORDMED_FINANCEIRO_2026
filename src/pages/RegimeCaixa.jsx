@@ -55,16 +55,22 @@ export function RegimeCaixa({ notas = [], medicos = [], tomadores = [] }) {
     const out = []
     notas.forEach(n => {
       if (fTomador && n.tomador !== fTomador) return
-      // Usa a competência de emissão ou o mês de recebimento, conforme a dimensão escolhida.
-      // Se o mês de recebimento não estiver preenchido, cai de volta pra competência de emissão.
-      const mesRef = fDimensao === 'recebimento' ? (n.mes_recebimento || n.comp) : n.comp
+      // 3 dimensões distintas e independentes:
+      // - emissao: competência da nota
+      // - recebimento: mês em que a EMPRESA recebeu do tomador (campo mes_recebimento)
+      // - pagamento: mês em que o MÉDICO foi pago de fato (campo data_pagamento)
+      let mesRef
+      if (fDimensao === 'recebimento') mesRef = n.mes_recebimento || n.comp
+      else if (fDimensao === 'pagamento') mesRef = n.data_pagamento ? n.data_pagamento.slice(0, 7) : n.comp
+      else mesRef = n.comp
       if (fCompDe && mesRef && mesRef < fCompDe) return
       if (fCompAte && mesRef && mesRef > fCompAte) return
       if (fStatus && n.status !== fStatus) return
       ;(n.medicos_nota || []).forEach(mn => {
         if (fMedico && mn.nome !== fMedico) return
         out.push({
-          nf: n.nf, tomador: n.tomador, comp: n.comp, mesRecebimento: n.mes_recebimento, status: n.status,
+          nf: n.nf, tomador: n.tomador, comp: n.comp, mesRecebimento: n.mes_recebimento,
+          dataPagamento: n.data_pagamento, status: n.status,
           medico: mn.nome, bruto: mn.valor_bruto_medico || 0, repasse: mn.repasse || 0,
         })
       })
@@ -133,7 +139,8 @@ export function RegimeCaixa({ notas = [], medicos = [], tomadores = [] }) {
                 <label style={labelStyle}>Filtrar período por</label>
                 <select style={inputStyle} value={fDimensao} onChange={e => setFDimensao(e.target.value)}>
                   <option value="emissao">Competência de emissão</option>
-                  <option value="recebimento">Mês de recebimento</option>
+                  <option value="recebimento">Mês de recebimento (do tomador)</option>
+                  <option value="pagamento">Mês de pagamento (ao médico)</option>
                 </select>
               </div>
               <div>
@@ -223,6 +230,7 @@ export function RegimeCaixa({ notas = [], medicos = [], tomadores = [] }) {
                     <th style={thStyle}>Tomador</th>
                     <th style={thStyle}>Competência</th>
                     <th style={thStyle}>Receb.</th>
+                    <th style={thStyle}>Pagto.</th>
                     <th style={thStyle}>Médico</th>
                     <th style={{ ...thStyle, textAlign: 'right' }}>Bruto</th>
                     <th style={{ ...thStyle, textAlign: 'right' }}>Repasse</th>
@@ -230,7 +238,7 @@ export function RegimeCaixa({ notas = [], medicos = [], tomadores = [] }) {
                   </tr></thead>
                   <tbody>
                     {linhas.length === 0 && (
-                      <tr><td colSpan={8} style={{ ...tdStyle, textAlign: 'center', color: GRAY[3], padding: 30 }}>Nenhuma nota encontrada para os filtros selecionados.</td></tr>
+                      <tr><td colSpan={9} style={{ ...tdStyle, textAlign: 'center', color: GRAY[3], padding: 30 }}>Nenhuma nota encontrada para os filtros selecionados.</td></tr>
                     )}
                     {linhas.map((l, i) => (
                       <tr key={i}>
@@ -239,6 +247,9 @@ export function RegimeCaixa({ notas = [], medicos = [], tomadores = [] }) {
                         <td style={{ ...tdStyle, fontFamily: 'monospace' }}>{fmtMes(l.comp)}</td>
                         <td style={{ ...tdStyle, fontFamily: 'monospace', color: l.mesRecebimento && l.mesRecebimento !== l.comp ? ORANGE : GRAY[3], fontWeight: l.mesRecebimento && l.mesRecebimento !== l.comp ? 700 : 400 }}>
                           {l.mesRecebimento ? fmtMes(l.mesRecebimento) : '—'}
+                        </td>
+                        <td style={{ ...tdStyle, fontFamily: 'monospace', color: '#16A34A', fontWeight: 700 }}>
+                          {l.dataPagamento ? fmtMes(l.dataPagamento.slice(0, 7)) : '—'}
                         </td>
                         <td style={{ ...tdStyle, whiteSpace: 'normal' }}>{l.medico}</td>
                         <td style={{ ...tdStyle, textAlign: 'right', fontFamily: 'monospace' }}>R$ {brl(l.bruto)}</td>
