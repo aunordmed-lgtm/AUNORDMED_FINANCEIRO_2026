@@ -849,12 +849,13 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
     toast('Abrindo WhatsApp…')
   }
 
+  function copiarAvisoEmissao(nota, mn) {
+    const msg = montarMensagemAvisoEmissao(nota, mn)
+    navigator.clipboard.writeText(msg).then(() => toast('Mensagem copiada!')).catch(() => toast('Erro ao copiar.', 'error'))
+  }
+
   function abrirAvisoEmissao(nota) {
     if (!nota.medicos_nota?.length) { toast('Esta nota não tem médicos vinculados.', 'error'); return }
-    if (nota.medicos_nota.length === 1) {
-      enviarAvisoEmissao(nota, nota.medicos_nota[0])
-      return
-    }
     setModalAvisoNota(nota)
   }
 
@@ -1627,11 +1628,11 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
         )}
       </Modal>
 
-      {/* MODAL: escolher médico quando a nota tem mais de um, pra avisar emissão */}
-      <Modal open={!!modalAvisoNota} onClose={() => setModalAvisoNota(null)} title="Avisar emissão — escolha o médico"
+      {/* MODAL: avisar emissão — copiar mensagem ou enviar por WhatsApp, por médico */}
+      <Modal open={!!modalAvisoNota} onClose={() => setModalAvisoNota(null)} title="Avisar NF emitida"
         footer={<button className="btn btn-ghost" onClick={() => setModalAvisoNota(null)}>Fechar</button>}>
         <div style={{ fontSize: 12, color: 'var(--n4)', marginBottom: 12 }}>
-          Essa nota tem mais de um médico vinculado. Escolha pra quem enviar o aviso de emissão:
+          Escolha o médico e a forma de enviar o aviso de emissão:
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {modalAvisoNota?.medicos_nota?.map((mn, i) => (
@@ -1640,7 +1641,8 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
                 <div style={{ fontWeight: 600, fontSize: 13 }}>{mn.nome}</div>
                 <div style={{ fontSize: 11, color: 'var(--n5)' }}>Bruto: {brl(mn.valor_bruto_medico || 0)}</div>
               </div>
-              <button className="btn btn-primary btn-sm" onClick={() => enviarAvisoEmissao(modalAvisoNota, mn)}>📨 Enviar</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => copiarAvisoEmissao(modalAvisoNota, mn)}>📋 Copiar</button>
+              <button className="btn btn-primary btn-sm" onClick={() => enviarAvisoEmissao(modalAvisoNota, mn)}>💬 WhatsApp</button>
             </div>
           ))}
         </div>
