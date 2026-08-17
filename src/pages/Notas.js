@@ -181,6 +181,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
   const [loadingExtrato, setLoadingExtrato] = useState(false)
   const [sincronizandoExtrato, setSincronizandoExtrato] = useState(false)
   const [corrigindoStatus, setCorrigindoStatus] = useState(false)
+  const [modalAvisoNota, setModalAvisoNota] = useState(null) // nota selecionada, ou null
   const [buscaExtratoConfirmado, setBuscaExtratoConfirmado] = useState('')
   const [expandidoExtratoConfirmado, setExpandidoExtratoConfirmado] = useState(null)
   const [editandoExtratoId, setEditandoExtratoId] = useState(null)
@@ -830,6 +831,33 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
     if (gerados > 0) { toast(`${gerados} comprovante(s) gerado(s) com sucesso!`); onRefresh() }
   }
 
+  // Aviso de "NF emitida" — mensagem informativa pro médico, deixando claro
+  // que ainda NÃO é o pagamento, só a emissão da nota.
+  function montarMensagemAvisoEmissao(nota, mn) {
+    return `🏥 *AunordMED Financeiro*\nOlá, Dr(a). *${mn.nome}*!\nSua nota fiscal *#${nota.nf || '—'}* foi *emitida*.\n🏢 *Tomador:* ${nota.tomador || '—'}\n📅 *Competência:* ${fmtMes(nota.comp)}\n💰 *Valor bruto:* R$ ${(mn.valor_bruto_medico || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n\n_Este é só um aviso de emissão — o repasse ainda será processado e comunicado separadamente._\n_AunordMED — Gestão financeira médica_`
+  }
+
+  function enviarAvisoEmissao(nota, mn) {
+    const med = medicos.find(m => m.nome === mn.nome)
+    const tel = med?.telefone_whatsapp || med?.telefone
+    const msg = montarMensagemAvisoEmissao(nota, mn)
+    if (!tel) {
+      navigator.clipboard.writeText(msg).then(() => toast(`${mn.nome} sem WhatsApp cadastrado — mensagem copiada.`, 'error'))
+      return
+    }
+    window.open(`https://wa.me/${tel.replace(/\D/g, '')}?text=${encodeURIComponent(msg)}`, '_blank')
+    toast('Abrindo WhatsApp…')
+  }
+
+  function abrirAvisoEmissao(nota) {
+    if (!nota.medicos_nota?.length) { toast('Esta nota não tem médicos vinculados.', 'error'); return }
+    if (nota.medicos_nota.length === 1) {
+      enviarAvisoEmissao(nota, nota.medicos_nota[0])
+      return
+    }
+    setModalAvisoNota(nota)
+  }
+
   const exportarRelatorio = () => {
     const rows = [['NF','Tomador','Médicos','Competência','Bruto','Recebido','Repasse','Margem','% Margem','Status']]
     notasRel.forEach(n => rows.push([n.nf, n.tomador, n.nomes_medicos, fmtMes(n.comp), +(n.bruto||0).toFixed(2), +(n.recebido||0).toFixed(2), +(n.total_repasse||0).toFixed(2), +(n.margem||0).toFixed(2), +((n.pct_margem||0)*100).toFixed(2)+'%', n.status]))
@@ -986,6 +1014,8 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
                       <button className="btn btn-ghost btn-xs" onClick={() => abrirEditar(n)}>✏️</button>
                       <button className="btn btn-outline btn-xs" style={{ fontSize:10, color:'var(--g3)', borderColor:'var(--g8)' }}
                         onClick={() => gerarComprovante(n)} title="Gerar comprovante para os médicos vinculados">🧾</button>
+                      <button className="btn btn-outline btn-xs" style={{ fontSize:10, color:'#25D366', borderColor:'#BBF7D0' }}
+                        onClick={() => abrirAvisoEmissao(n)} title="Avisar médico(s) por WhatsApp que a NF foi emitida (ainda não é pagamento)">📨</button>
                       <button className="btn btn-danger btn-xs" onClick={() => excluir(n.id)}>✕</button>
                     </td>
                   </tr>
@@ -1595,6 +1625,25 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
             )}
           </div>
         )}
+      </Modal>
+
+      {/* MODAL: escolher médico quando a nota tem mais de um, pra avisar emissão */}
+      <Modal open={!!modalAvisoNota} onClose={() => setModalAvisoNota(null)} title="Avisar emissão — escolha o médico"
+        footer={<button className="btn btn-ghost" onClick={() => setModalAvisoNota(null)}>Fechar</button>}>
+        <div style={{ fontSize: 12, color: 'var(--n4)', marginBottom: 12 }}>
+          Essa nota tem mais de um médico vinculado. Escolha pra quem enviar o aviso de emissão:
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {modalAvisoNota?.medicos_nota?.map((mn, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 8 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600, fontSize: 13 }}>{mn.nome}</div>
+                <div style={{ fontSize: 11, color: 'var(--n5)' }}>Bruto: {brl(mn.valor_bruto_medico || 0)}</div>
+              </div>
+              <button className="btn btn-primary btn-sm" onClick={() => enviarAvisoEmissao(modalAvisoNota, mn)}>📨 Enviar</button>
+            </div>
+          ))}
+        </div>
       </Modal>
     </div>
   )
