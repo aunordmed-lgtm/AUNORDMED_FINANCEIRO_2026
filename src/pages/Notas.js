@@ -252,6 +252,19 @@ export function Notas({ notas, medicos, onRefresh }) {
     onRefresh()
   }
 
+  const notificarEmissao = (nota) => {
+    const med = nota.medicos_nota?.[0]
+    const nomeMed = med?.nome || 'Dr(a).'
+    const medCad = medicos.find(m => m.nome === nomeMed)
+    const tel = medCad?.telefone_whatsapp?.replace(/\D/g,'') || ''
+    const msg = `🏥 *AunordMED Financeiro*\n\nOlá, Dr(a). *${nomeMed}*!\n\nSua nota fiscal *#${nota.nf}* foi *emitida*.\n🏢 *Tomador:* ${nota.tomador || '—'}\n📅 *Competência:* ${fmtMes(nota.comp)}\n💰 *Valor bruto:* R$ ${(nota.bruto||0).toLocaleString('pt-BR',{minimumFractionDigits:2})}\n\n_Este é só um aviso de emissão — o repasse ainda será processado e comunicado separadamente._\n_AunordMED — Gestão financeira médica_`
+    if (tel) {
+      window.open(`https://wa.me/55${tel}?text=${encodeURIComponent(msg)}`, '_blank')
+    } else {
+      navigator.clipboard.writeText(msg).then(() => toast('Mensagem copiada! (médico sem WhatsApp cadastrado)'))
+    }
+  }
+
   const gerarComprovante = async (nota) => {
     if (!nota.medicos_nota?.length) { toast('Esta nota não tem médicos vinculados.', 'error'); return }
     setLoading(true)
@@ -262,7 +275,16 @@ export function Notas({ notas, medicos, onRefresh }) {
         const repasse = mn.repasse || (mn.valor_bruto_medico * (1 - (mn.retencao_individual || 13) / 100))
         // Verificar se já existe comprovante para essa nota + médico
         const { data: exist } = await supabase.from('comprovantes').select('id').eq('nf_id', nota.id).eq('medico_nome', mn.nome).maybeSingle()
-        if (exist) { toast(`Comprovante de ${mn.nome} já existe.`, 'error'); continue }
+        if (exist) {
+          // Atualizar comprovante existente com data e dados atualizados
+          await supabase.from('comprovantes').update({
+            valor_repasse: repasse,
+            data_pagamento: new Date().toISOString().split('T')[0],
+            dados_extras: { nf: nota.nf, pix: med?.chave_pix, tipo_pix: med?.tipo_pix, retencao: mn.retencao_individual || med?.retencao || 13 }
+          }).eq('id', exist.id)
+          gerados++
+          continue
+        }
         await supabase.from('comprovantes').insert({
           token: uid(),
           nf_id: nota.id,
@@ -401,7 +423,9 @@ export function Notas({ notas, medicos, onRefresh }) {
                     <td style={{ display:'flex', gap:4, paddingTop:6 }}>
                       <button className="btn btn-ghost btn-xs" onClick={() => abrirEditar(n)}>✏️</button>
                       <button className="btn btn-outline btn-xs" style={{ fontSize:10, color:'var(--g3)', borderColor:'var(--g8)' }}
-                        onClick={() => gerarComprovante(n)} title="Gerar comprovante para os médicos vinculados">🧾</button>
+                        onClick={() => gerarComprovante(n)} title="Gerar comprovante de repasse">🧾</button>
+                      <button className="btn btn-outline btn-xs" style={{ fontSize:10, color:'#25D366', borderColor:'#25D366' }}
+                        onClick={() => notificarEmissao(n)} title="Notificar emissão da NF via WhatsApp">💬</button>
                       <button className="btn btn-danger btn-xs" onClick={() => excluir(n.id)}>✕</button>
                     </td>
                   </tr>
