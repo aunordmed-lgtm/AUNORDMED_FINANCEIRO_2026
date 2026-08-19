@@ -44,7 +44,7 @@ function diasEntre(dataStr) {
   return Math.floor((hoje - d) / 86400000)
 }
 
-export function Gargalos({ notas = [], tomadores = [] }) {
+export function Gargalos({ notas = [], tomadores = [], medicos = [] }) {
   const [fTomador, setFTomador] = useState('')
   const [fCompDe, setFCompDe] = useState('')
   const [fCompAte, setFCompAte] = useState('')
@@ -95,6 +95,54 @@ export function Gargalos({ notas = [], tomadores = [] }) {
     total: comDiferenca.reduce((a, n) => a + n.diferenca, 0),
   }
 
+  // ── LINHA DO TEMPO: quais médicos faturaram (ou não) em cada um dos últimos N meses ──
+  const [janelaMeses, setJanelaMeses] = useState(6)
+  const [buscaTimeline, setBuscaTimeline] = useState('')
+  const [ocultarAtivos, setOcultarAtivos] = useState(false)
+
+  const mesesJanela = useMemo(() => {
+    const hoje = new Date()
+    const arr = []
+    for (let i = janelaMeses - 1; i >= 0; i--) {
+      const d = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1)
+      const chave = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+      arr.push(chave)
+    }
+    return arr
+  }, [janelaMeses])
+
+  const timelineMedicos = useMemo(() => {
+    const porMedico = {}
+    medicos.forEach(m => { porMedico[m.nome] = { nome: m.nome, crm: m.crm || '', meses: {} } })
+    notas.forEach(n => {
+      if (!n.comp) return
+      ;(n.medicos_nota || []).forEach(mn => {
+        if (!porMedico[mn.nome]) porMedico[mn.nome] = { nome: mn.nome, crm: mn.crm || '', meses: {} }
+        porMedico[mn.nome].meses[n.comp] = (porMedico[mn.nome].meses[n.comp] || 0) + (mn.valor_bruto_medico || 0)
+      })
+    })
+
+    const hojeChave = mesesJanela[mesesJanela.length - 1]
+    let arr = Object.values(porMedico).map(m => {
+      // conta quantos meses consecutivos, terminando no mês mais recente da janela, estão sem faturamento
+      let mesesSemFaturar = 0
+      for (let i = mesesJanela.length - 1; i >= 0; i--) {
+        if (!m.meses[mesesJanela[i]]) mesesSemFaturar++
+        else break
+      }
+      const faturouUltimoMes = !!m.meses[hojeChave]
+      return { ...m, mesesSemFaturar, faturouUltimoMes }
+    })
+
+    if (buscaTimeline) arr = arr.filter(m => m.nome.toLowerCase().includes(buscaTimeline.toLowerCase()))
+    if (ocultarAtivos) arr = arr.filter(m => m.mesesSemFaturar > 0)
+
+    arr.sort((a, b) => b.mesesSemFaturar - a.mesesSemFaturar || a.nome.localeCompare(b.nome, 'pt-BR'))
+    return arr
+  }, [medicos, notas, mesesJanela, buscaTimeline, ocultarAtivos])
+
+  const qtdInativos = useMemo(() => timelineMedicos.filter(m => m.mesesSemFaturar >= 2).length, [timelineMedicos])
+
   function limparFiltros() { setFTomador(''); setFCompDe(''); setFCompAte('') }
 
   function corDias(dias) {
@@ -139,6 +187,86 @@ export function Gargalos({ notas = [], tomadores = [] }) {
           <Kpi label="Valor bruto travado" value={`R$ ${brl(kpiTravadas.valorBruto)}`} sub="ainda não recebido" color={ORANGE} />
           <Kpi label="Maior atraso" value={`${kpiTravadas.maiorAtraso} dias`} sub={`média de ${kpiTravadas.mediaDias} dias`} color={corDias(kpiTravadas.maiorAtraso)} />
           <Kpi label="Prejuízo total" value={`R$ ${brl(kpiPrejuizo.total)}`} sub={`${kpiPrejuizo.qtd} nota(s) com valor a menor`} color={kpiPrejuizo.total > 0 ? RED : G.g2} />
+        </div>
+
+        {/* LINHA DO TEMPO POR MÉDICO */}
+        <div style={{ ...cardStyle, overflow: 'hidden', marginBottom: 24 }}>
+          <div style={{ padding: '14px 20px', borderBottom: '1px solid #D4E6DA', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: GRAY[0] }}>🗓️ Linha do tempo — quem não está faturando</div>
+              <div style={{ fontSize: 11, color: GRAY[3], marginTop: 2 }}>Visão rápida pra gestores: verde = faturou naquele mês, vermelho = não faturou</div>
+            </div>
+            <div style={{ flex: 1 }} />
+            <div style={{ display: 'flex', gap: 4 }}>
+              {[3, 6, 12].map(n => (
+                <button key={n} onClick={() => setJanelaMeses(n)} style={{
+                  padding: '5px 12px', borderRadius: 8, cursor: 'pointer', fontSize: 11, fontWeight: 700,
+                  border: '1px solid ' + (janelaMeses === n ? G.g3 : '#D4E6DA'),
+                  background: janelaMeses === n ? G.g3 : '#fff', color: janelaMeses === n ? '#fff' : GRAY[2],
+                }}>{n}M</button>
+              ))}
+            </div>
+            <input type="text" placeholder="🔍 Buscar médico..." value={buscaTimeline} onChange={e => setBuscaTimeline(e.target.value)}
+              style={{ ...inputStyle, minWidth: 180, height: 32 }} />
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: GRAY[2], cursor: 'pointer' }}>
+              <input type="checkbox" checked={ocultarAtivos} onChange={e => setOcultarAtivos(e.target.checked)} />
+              Só mostrar quem parou de faturar
+            </label>
+          </div>
+
+          {qtdInativos > 0 && (
+            <div style={{ padding: '10px 20px', background: '#FEF2F2', borderBottom: '1px solid #FECACA', fontSize: 12.5, color: '#B91C1C' }}>
+              ⚠️ <strong>{qtdInativos}</strong> médico(s) sem faturar há 2 meses ou mais.
+            </div>
+          )}
+
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 500 + mesesJanela.length * 60 }}>
+              <thead>
+                <tr style={{ background: G.g1 }}>
+                  <th style={{ ...thStyle, position: 'sticky', left: 0, background: G.g1, zIndex: 1, minWidth: 200 }}>Médico</th>
+                  {mesesJanela.map(m => (
+                    <th key={m} style={{ ...thStyle, textAlign: 'center', minWidth: 56 }}>{fmtMes(m)}</th>
+                  ))}
+                  <th style={{ ...thStyle, textAlign: 'center' }}>Situação</th>
+                </tr>
+              </thead>
+              <tbody>
+                {timelineMedicos.length === 0 && (
+                  <tr><td colSpan={mesesJanela.length + 2} style={{ ...tdStyle, textAlign: 'center', color: GRAY[3], padding: 30 }}>Nenhum médico encontrado.</td></tr>
+                )}
+                {timelineMedicos.map((m, i) => (
+                  <tr key={i}>
+                    <td style={{ ...tdStyle, position: 'sticky', left: 0, background: '#fff', fontWeight: 600, whiteSpace: 'normal' }}>
+                      {m.nome}
+                      {m.crm && <div style={{ fontSize: 10, color: GRAY[3], fontWeight: 400 }}>{m.crm}</div>}
+                    </td>
+                    {mesesJanela.map(mesChave => {
+                      const valor = m.meses[mesChave]
+                      return (
+                        <td key={mesChave} style={{ padding: 6, textAlign: 'center' }}>
+                          <div title={valor ? `R$ ${brl(valor)}` : 'Sem faturamento'} style={{
+                            width: '100%', height: 26, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            background: valor ? G.g7 : '#FEF2F2', border: '1px solid ' + (valor ? G.g6 : '#FECACA'),
+                            color: valor ? G.g2 : RED, fontSize: 13,
+                          }}>
+                            {valor ? '✓' : '✕'}
+                          </div>
+                        </td>
+                      )
+                    })}
+                    <td style={{ ...tdStyle, textAlign: 'center' }}>
+                      {m.mesesSemFaturar === 0
+                        ? <span style={badge(G.g7, G.g2, G.g6)}>Em dia</span>
+                        : <span style={badge(m.mesesSemFaturar >= 3 ? '#FEF2F2' : '#FFFBEB', m.mesesSemFaturar >= 3 ? RED : ORANGE, m.mesesSemFaturar >= 3 ? '#FECACA' : '#FDE68A')}>
+                            {m.mesesSemFaturar} mês(es) parado
+                          </span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         {/* GARGALO */}
