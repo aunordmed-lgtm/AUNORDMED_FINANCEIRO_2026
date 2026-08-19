@@ -117,7 +117,7 @@ export function Gargalos({ notas = [], tomadores = [], medicos = [] }) {
     notas.forEach(n => {
       if (!n.comp) return
       ;(n.medicos_nota || []).forEach(mn => {
-        if (!porMedico[mn.nome]) porMedico[mn.nome] = { nome: mn.nome, crm: mn.crm || '', meses: {} }
+        if (!porMedico[mn.nome]) return // só médicos cadastrados entram na linha do tempo
         porMedico[mn.nome].meses[n.comp] = (porMedico[mn.nome].meses[n.comp] || 0) + (mn.valor_bruto_medico || 0)
       })
     })
