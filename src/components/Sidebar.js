@@ -31,6 +31,7 @@ const navItems = [
   { path: '/relatorios', icon: '📈', label: 'Por médico' },
   { path: '/regime-caixa', icon: '💳', label: 'Regime de caixa' },
   { section: 'Sistema' },
+  { path: '/documentos', icon: '📎', label: 'Documentos' },
   { path: '/configuracoes', icon: '⚙️', label: 'Configurações' },
 ]
 
