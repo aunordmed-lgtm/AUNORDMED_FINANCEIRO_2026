@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AunordMED — Meu Faturamento</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap');
+:root{
+  --g1:#0D3D20;--g2:#145C30;--g3:#1A7A3E;--g5:#3DB368;--g6:#A8DCBA;--g7:#E8F5ED;
+  --gray0:#0F172A;--gray1:#1E293B;--gray2:#475569;--gray3:#94A3B8;--gray5:#E2E8F0;--gray6:#F1F5F9;
+  --blue:#1A56DB;--blue-l:#EBF5FF;
+  --border:#D4E6DA;--radius:10px;--radius-lg:14px;--radius-xl:20px;
+  --mono:'JetBrains Mono',monospace;--sans:'Inter',sans-serif;
+  --sh:0 1px 3px rgba(0,0,0,.06);
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--sans);background:#F0F4F2;color:var(--gray0);min-height:100vh;padding:24px 16px}
+.wrapper{max-width:760px;margin:0 auto}
+.lov{position:fixed;inset:0;background:#fff;z-index:999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;font-size:14px;color:var(--gray2)}
+.lov.hide{display:none}
+.spin{width:32px;height:32px;border:3px solid var(--g6);border-top-color:#22994D;border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+.header-card{background:linear-gradient(135deg,var(--g1) 0%,var(--g3) 100%);border-radius:var(--radius-xl);padding:24px 26px;margin-bottom:14px}
+.logo-name{font-size:18px;font-weight:700;color:#fff}
+.logo-name span{color:var(--g5)}
+.medico-nome{font-size:20px;font-weight:700;color:#fff;margin-top:10px}
+.medico-crm{font-size:12px;color:rgba(255,255,255,.55);margin-top:2px}
+
+.kpi-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
+.kpi{background:#fff;border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;box-shadow:var(--sh)}
+.kpi-lbl{font-size:9.5px;font-weight:700;color:var(--gray3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px}
+.kpi-val{font-size:18px;font-weight:700;font-family:var(--mono);color:var(--gray0)}
+
+.filtro-row{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.filtro-row select{height:34px;border:1.5px solid var(--border);border-radius:8px;padding:0 10px;font-family:var(--sans);font-size:12px;color:var(--gray1);background:var(--gray6)}
+
+.card{background:#fff;border:1px solid var(--border);border-radius:var(--radius-xl);overflow:hidden;box-shadow:var(--sh)}
+table{width:100%;border-collapse:collapse;font-size:12px}
+thead tr{background:var(--g1)}
+th{padding:9px 12px;text-align:left;font-size:9px;font-weight:700;color:var(--g6);text-transform:uppercase;letter-spacing:.4px;white-space:nowrap}
+td{padding:9px 12px;border-bottom:1px solid var(--gray6);white-space:nowrap}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover{background:var(--g7)}
+.mono{font-family:var(--mono)}
+.badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:99px;font-size:9.5px;font-weight:700}
+.b-pag{background:var(--g7);color:var(--g2);border:1px solid var(--g6)}
+.b-rec{background:var(--blue-l);color:var(--blue);border:1px solid #93C5FD}
+.b-emit{background:#FFFBEB;color:#D97706;border:1px solid #FDE68A}
+.empty{text-align:center;padding:40px 20px;color:var(--gray3);font-size:13px}
+.erro{text-align:center;padding:60px 20px}
+.erro-ic{font-size:42px;margin-bottom:12px}
+.footer{text-align:center;padding:16px;font-size:11px;color:var(--gray3)}
+
+@media(max-width:600px){
+  .kpi-grid{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+
+<div class="lov" id="lov"><div class="spin"></div><span>Carregando seu faturamento…</span></div>
+
+<div class="wrapper" id="wrapper" style="display:none">
+  <div class="header-card">
+    <div class="logo-name">Aunord<span>MED</span></div>
+    <div class="medico-nome" id="v-nome">—</div>
+    <div class="medico-crm" id="v-crm"></div>
+  </div>
+
+  <div class="kpi-grid">
+    <div class="kpi"><div class="kpi-lbl">Notas no total</div><div class="kpi-val" id="k-qtd">0</div></div>
+    <div class="kpi"><div class="kpi-lbl">Total bruto faturado</div><div class="kpi-val" id="k-bruto">R$ 0,00</div></div>
+    <div class="kpi"><div class="kpi-lbl">Total repasse (devido)</div><div class="kpi-val" id="k-repasse" style="color:var(--g2)">R$ 0,00</div></div>
+  </div>
+
+  <div class="filtro-row">
+    <select id="f-ano" onchange="renderTabela()">
+      <option value="">Todos os anos</option>
+    </select>
+    <select id="f-status" onchange="renderTabela()">
+      <option value="">Todos os status</option>
+      <option value="Emitida">Emitida</option>
+      <option value="Recebida">Recebida</option>
+      <option value="Paga ao médico">Paga ao médico</option>
+    </select>
+  </div>
+
+  <div class="card">
+    <table>
+      <thead><tr>
+        <th>Competência</th><th>Nº NF</th><th>Tomador</th>
+        <th style="text-align:right">Bruto</th><th style="text-align:right">Repasse</th><th>Status</th>
+      </tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+
+  <div class="footer">AunordMED — Gestão financeira médica</div>
+</div>
+
+<script>
+const SUPA_URL='https://hleesgnzpkjuhjshyaal.supabase.co';
+const SUPA_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhsZWVzZ256cGtqdWhqc2h5YWFsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIzODczMTksImV4cCI6MjA5Nzk2MzMxOX0.jnVO9Bqo-s5DPK0-tFeYr_UeBaEkXCmVa2xhA93aVDk';
+const H={'Content-Type':'application/json','apikey':SUPA_KEY,'Authorization':'Bearer '+SUPA_KEY};
+async function sGet(t,q=''){const r=await fetch(`${SUPA_URL}/rest/v1/${t}?${q}`,{headers:H});if(!r.ok)throw new Error(await r.text());return r.json();}
+
+const brl=v=>Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmtMes=m=>{if(!m)return'—';const[y,mo]=m.split('-');const ms=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];return`${ms[+mo-1]}/${y}`;};
+
+let notasDoMedico=[];
+
+function getToken(){return new URLSearchParams(window.location.search).get('token');}
+
+function mostrarErro(msg){
+  document.getElementById('lov').classList.add('hide');
+  document.getElementById('wrapper').style.display='block';
+  document.getElementById('wrapper').innerHTML=`<div class="erro"><div class="erro-ic">❌</div><h3 style="margin-bottom:6px">Link não encontrado</h3><p style="color:var(--gray3);font-size:13px">${msg}</p></div>`;
+}
+
+function renderTabela(){
+  const ano=document.getElementById('f-ano').value;
+  const status=document.getElementById('f-status').value;
+  const filtradas=notasDoMedico.filter(n=>{
+    if(ano && (!n.comp || !n.comp.startsWith(ano))) return false;
+    if(status && n.status!==status) return false;
+    return true;
+  });
+  const tbody=document.getElementById('tbody');
+  if(!filtradas.length){
+    tbody.innerHTML=`<tr><td colspan="6"><div class="empty">Nenhuma nota encontrada.</div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML=filtradas.map(n=>{
+    const bdg=n.status==='Paga ao médico'?'b-pag':n.status==='Recebida'?'b-rec':'b-emit';
+    return `<tr>
+      <td class="mono">${fmtMes(n.comp)}</td>
+      <td class="mono" style="font-weight:600">${n.nf||'—'}</td>
+      <td>${n.tomador||'—'}</td>
+      <td class="mono" style="text-align:right;font-weight:600">R$ ${brl(n._bruto)}</td>
+      <td class="mono" style="text-align:right;color:var(--g2);font-weight:700">R$ ${brl(n._repasse)}</td>
+      <td><span class="badge ${bdg}">${n.status}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+async function init(){
+  const token=getToken();
+  if(!token){mostrarErro('Link inválido — token não informado.');return;}
+  try{
+    const meds=await sGet('medicos',`token_portal=eq.${token}&limit=1`);
+    if(!meds||!meds.length){mostrarErro('Este link não corresponde a nenhum médico cadastrado.');return;}
+    const medico=meds[0];
+    document.getElementById('v-nome').textContent=medico.nome||'—';
+    document.getElementById('v-crm').textContent=medico.crm?`CRM ${medico.crm}`:'';
+
+    const todasNotas=await sGet('notas_fiscais','order=comp.desc');
+    notasDoMedico=[];
+    todasNotas.forEach(n=>{
+      const mn=(n.medicos_nota||[]).find(m=>m.nome===medico.nome);
+      if(!mn) return;
+      notasDoMedico.push({...n, _bruto:mn.valor_bruto_medico||0, _repasse:mn.repasse||0});
+    });
+
+    const totalBruto=notasDoMedico.reduce((a,n)=>a+n._bruto,0);
+    const totalRepasse=notasDoMedico.reduce((a,n)=>a+n._repasse,0);
+    document.getElementById('k-qtd').textContent=notasDoMedico.length;
+    document.getElementById('k-bruto').textContent='R$ '+brl(totalBruto);
+    document.getElementById('k-repasse').textContent='R$ '+brl(totalRepasse);
+
+    const anos=[...new Set(notasDoMedico.map(n=>n.comp?n.comp.slice(0,4):null).filter(Boolean))].sort().reverse();
+    const selAno=document.getElementById('f-ano');
+    anos.forEach(a=>{const o=document.createElement('option');o.value=a;o.textContent=a;selAno.appendChild(o);});
+
+    renderTabela();
+    document.getElementById('lov').classList.add('hide');
+    document.getElementById('wrapper').style.display='block';
+  }catch(e){
+    mostrarErro('Erro ao carregar: '+e.message);
+  }
+}
+init();
+</script>
+</body>
+</html>
