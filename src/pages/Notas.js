@@ -861,8 +861,9 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
         onRefresh()
       }
       const link = `${BASE_URL_COMPROVANTES}/faturamento_medico.html?token=${token}`
-      await navigator.clipboard.writeText(link)
-      toast('Link copiado! Já pode mandar pro médico.')
+      const msg = `🏥 *AunordMED Financeiro*\nOlá, Dr(a). *${med.nome}*!\nSeu painel de faturamento está disponível — sempre atualizado, é só abrir quando quiser conferir.\n📄 Acesse:\n${link}\n\n_AunordMED — Gestão financeira médica_`
+      await navigator.clipboard.writeText(msg)
+      toast('Mensagem copiada! Já pode colar no WhatsApp.')
     } catch (e) {
       toast('Erro ao gerar link: ' + e.message, 'error')
     }
@@ -1416,8 +1417,8 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
                   </span>
                   <button onClick={() => copiarLinkFaturamentoMedico(g.medico)}
                     style={{ background: 'rgba(255,255,255,.12)', border: '1px solid rgba(255,255,255,.25)', color: '#fff', borderRadius: 6, padding: '3px 10px', fontSize: 10.5, cursor: 'pointer', fontWeight: 600 }}
-                    title="Copiar link de visualização do faturamento desse médico">
-                    🔗 Link
+                    title="Copiar mensagem com o link de faturamento desse médico">
+                    📋 Copiar mensagem
                   </button>
                 </div>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
