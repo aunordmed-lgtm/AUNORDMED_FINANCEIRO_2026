@@ -844,7 +844,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
   // que ainda NÃO é o pagamento, só a emissão da nota. Inclui link público
   // (comprovante_emissao.html), reaproveitando a mesma tabela "comprovantes",
   // distinguindo pelo campo "tipo" = 'emissao'.
-  const BASE_URL_COMPROVANTES = 'https://aunordmed-lgtm.github.io/aunordmed-financeiro'
+  const BASE_URL_COMPROVANTES = 'https://aunordmed-app1.vercel.app'
 
   // Link permanente de visualização do faturamento (baseado nas notas, não no
   // extrato) — gera um token único por médico na primeira vez, e reaproveita
