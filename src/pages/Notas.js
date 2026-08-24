@@ -841,15 +841,66 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
   }
 
   // Aviso de "NF emitida" — mensagem informativa pro médico, deixando claro
-  // que ainda NÃO é o pagamento, só a emissão da nota.
-  function montarMensagemAvisoEmissao(nota, mn) {
-    return `🏥 *AunordMED Financeiro*\nOlá, Dr(a). *${mn.nome}*!\nSua nota fiscal *#${nota.nf || '—'}* foi *emitida*.\n🏢 *Tomador:* ${nota.tomador || '—'}\n📅 *Competência:* ${fmtMes(nota.comp)}\n💰 *Valor bruto:* R$ ${(mn.valor_bruto_medico || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n\n_Este é só um aviso de emissão — o repasse ainda será processado e comunicado separadamente._\n_AunordMED — Gestão financeira médica_`
+  // que ainda NÃO é o pagamento, só a emissão da nota. Inclui link público
+  // (comprovante_emissao.html), reaproveitando a mesma tabela "comprovantes",
+  // distinguindo pelo campo "tipo" = 'emissao'.
+  const BASE_URL_COMPROVANTES = 'https://aunordmed-lgtm.github.io/aunordmed-financeiro'
+
+  // Link permanente de visualização do faturamento (baseado nas notas, não no
+  // extrato) — gera um token único por médico na primeira vez, e reaproveita
+  // depois. Diferente do comprovante, esse link não muda por nota, é fixo pro médico.
+  async function copiarLinkFaturamentoMedico(nomeMedico) {
+    const med = medicos.find(m => m.nome === nomeMedico)
+    if (!med) { toast('Médico não encontrado no cadastro.', 'error'); return }
+    try {
+      let token = med.token_portal
+      if (!token) {
+        token = uid()
+        const { error } = await supabase.from('medicos').update({ token_portal: token }).eq('id', med.id)
+        if (error) throw error
+        onRefresh()
+      }
+      const link = `${BASE_URL_COMPROVANTES}/faturamento_medico.html?token=${token}`
+      await navigator.clipboard.writeText(link)
+      toast('Link copiado! Já pode mandar pro médico.')
+    } catch (e) {
+      toast('Erro ao gerar link: ' + e.message, 'error')
+    }
   }
 
-  function enviarAvisoEmissao(nota, mn) {
+  async function obterOuCriarComprovanteEmissao(nota, mn) {
+    try {
+      const existentes = await supabase.from('comprovantes')
+        .select('token')
+        .eq('nf_id', nota.id)
+        .eq('medico_nome', mn.nome)
+        .eq('tipo', 'emissao')
+        .limit(1)
+      if (existentes?.data?.length) return existentes.data[0].token
+      const token = uid()
+      await supabase.from('comprovantes').insert({
+        token, nf_id: nota.id, medico_nome: mn.nome, tomador: nota.tomador,
+        valor_repasse: mn.repasse || 0, competencia: nota.comp || null,
+        tipo: 'emissao',
+        dados_extras: { nf: nota.nf, bruto: mn.valor_bruto_medico || 0 },
+      })
+      return token
+    } catch (e) {
+      return null
+    }
+  }
+
+  async function montarMensagemAvisoEmissao(nota, mn) {
+    const token = await obterOuCriarComprovanteEmissao(nota, mn)
+    const link = token ? `${BASE_URL_COMPROVANTES}/comprovante_emissao.html?token=${token}` : null
+    return `🏥 *AunordMED Financeiro*\nOlá, Dr(a). *${mn.nome}*!\nSua nota fiscal *#${nota.nf || '—'}* foi *emitida*.\n🏢 *Tomador:* ${nota.tomador || '—'}\n📅 *Competência:* ${fmtMes(nota.comp)}\n💰 *Valor bruto:* R$ ${(mn.valor_bruto_medico || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}${link ? `\n📄 Acesse:\n${link}` : ''}\n\n_Este é só um aviso de emissão — o repasse ainda será processado e comunicado separadamente._\n_AunordMED — Gestão financeira médica_`
+  }
+
+  async function enviarAvisoEmissao(nota, mn) {
     const med = medicos.find(m => m.nome === mn.nome)
     const tel = med?.telefone_whatsapp || med?.telefone
-    const msg = montarMensagemAvisoEmissao(nota, mn)
+    toast('Preparando aviso…')
+    const msg = await montarMensagemAvisoEmissao(nota, mn)
     if (!tel) {
       navigator.clipboard.writeText(msg).then(() => toast(`${mn.nome} sem WhatsApp cadastrado — mensagem copiada.`, 'error'))
       return
@@ -858,8 +909,9 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
     toast('Abrindo WhatsApp…')
   }
 
-  function copiarAvisoEmissao(nota, mn) {
-    const msg = montarMensagemAvisoEmissao(nota, mn)
+  async function copiarAvisoEmissao(nota, mn) {
+    toast('Preparando aviso…')
+    const msg = await montarMensagemAvisoEmissao(nota, mn)
     navigator.clipboard.writeText(msg).then(() => toast('Mensagem copiada!')).catch(() => toast('Erro ao copiar.', 'error'))
   }
 
@@ -1362,6 +1414,11 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
                   <span className="mono" style={{ fontSize: 11, color: g.pago >= g.repasse - 0.01 ? '#86EFAC' : '#FDE68A' }}>
                     Pago {brl(g.pago)}
                   </span>
+                  <button onClick={() => copiarLinkFaturamentoMedico(g.medico)}
+                    style={{ background: 'rgba(255,255,255,.12)', border: '1px solid rgba(255,255,255,.25)', color: '#fff', borderRadius: 6, padding: '3px 10px', fontSize: 10.5, cursor: 'pointer', fontWeight: 600 }}
+                    title="Copiar link de visualização do faturamento desse médico">
+                    🔗 Link
+                  </button>
                 </div>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead>
