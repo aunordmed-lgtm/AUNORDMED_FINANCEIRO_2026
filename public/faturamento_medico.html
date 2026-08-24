@@ -5,81 +5,137 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AunordMED — Meu Faturamento</title>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 :root{
-  --g1:#0D3D20;--g2:#145C30;--g3:#1A7A3E;--g5:#3DB368;--g6:#A8DCBA;--g7:#E8F5ED;
-  --gray0:#0F172A;--gray1:#1E293B;--gray2:#475569;--gray3:#94A3B8;--gray5:#E2E8F0;--gray6:#F1F5F9;
+  --g1:#0D3D20;--g2:#145C30;--g3:#1A7A3E;--g4:#22994D;--g5:#3DB368;--g6:#A8DCBA;--g7:#E8F5ED;
+  --gray0:#0F172A;--gray1:#1E293B;--gray2:#475569;--gray3:#94A3B8;--gray4:#CBD5E1;--gray5:#E2E8F0;--gray6:#F1F5F9;
   --blue:#1A56DB;--blue-l:#EBF5FF;
-  --border:#D4E6DA;--radius:10px;--radius-lg:14px;--radius-xl:20px;
+  --surface:#fff;--bg:#F0F4F2;--border:#D4E6DA;
+  --radius:10px;--radius-lg:14px;--radius-xl:20px;
   --mono:'JetBrains Mono',monospace;--sans:'Inter',sans-serif;
-  --sh:0 1px 3px rgba(0,0,0,.06);
+  --sh:0 1px 3px rgba(0,0,0,.06);--sh-md:0 8px 24px rgba(0,0,0,.1);
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-body{font-family:var(--sans);background:#F0F4F2;color:var(--gray0);min-height:100vh;padding:24px 16px}
+body{font-family:var(--sans);background:var(--bg);color:var(--gray0);min-height:100vh;padding:24px 16px}
 .wrapper{max-width:760px;margin:0 auto}
+
 .lov{position:fixed;inset:0;background:#fff;z-index:999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;font-size:14px;color:var(--gray2)}
 .lov.hide{display:none}
-.spin{width:32px;height:32px;border:3px solid var(--g6);border-top-color:#22994D;border-radius:50%;animation:spin .7s linear infinite}
+.spin-big{width:36px;height:36px;border:3px solid var(--g6);border-top-color:var(--g4);border-radius:50%;animation:spin .7s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 
-.header-card{background:linear-gradient(135deg,var(--g1) 0%,var(--g3) 100%);border-radius:var(--radius-xl);padding:24px 26px;margin-bottom:14px}
-.logo-name{font-size:18px;font-weight:700;color:#fff}
-.logo-name span{color:var(--g5)}
-.medico-nome{font-size:20px;font-weight:700;color:#fff;margin-top:10px}
-.medico-crm{font-size:12px;color:rgba(255,255,255,.55);margin-top:2px}
+.header-card{background:linear-gradient(135deg,var(--g1) 0%,var(--g3) 100%);border-radius:var(--radius-xl);padding:26px 28px 22px;margin-bottom:14px;position:relative;overflow:hidden}
+.header-card::before{content:'';position:absolute;top:-60px;right:-60px;width:220px;height:220px;border-radius:50%;background:rgba(255,255,255,.05)}
+.logo-area .logo-name{font-size:20px;font-weight:700;color:#fff;letter-spacing:-.3px}
+.logo-area .logo-name span{color:var(--g5)}
+.logo-area .logo-sub{font-size:10px;color:rgba(255,255,255,.5);letter-spacing:.6px;margin-top:2px}
+.medico-row{display:flex;align-items:center;gap:14px;position:relative;z-index:1;margin-top:16px}
+.avatar{width:52px;height:52px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:700;color:#fff;flex-shrink:0;border:2px solid rgba(255,255,255,.25);background:var(--g4)}
+.medico-nome{font-size:19px;font-weight:700;color:#fff;line-height:1.2}
+.medico-crm{font-size:12px;color:rgba(255,255,255,.6);margin-top:3px}
 
-.kpi-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
-.kpi{background:#fff;border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px 16px;box-shadow:var(--sh)}
-.kpi-lbl{font-size:9.5px;font-weight:700;color:var(--gray3);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px}
-.kpi-val{font-size:18px;font-weight:700;font-family:var(--mono);color:var(--gray0)}
+.dsh{margin-bottom:14px;border-radius:18px;overflow:hidden;background:#020c06;border:1px solid rgba(74,222,128,.15)}
+.dsh-top{padding:18px 20px 4px;display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.dsh-kt{text-align:center}
+.dsh-kt-lbl{font-size:9px;letter-spacing:1.6px;text-transform:uppercase;color:rgba(255,255,255,.35);margin-bottom:4px;font-weight:600}
+.dsh-kt-val{font-size:17px;font-weight:700;font-family:var(--mono);color:#4ade80;line-height:1}
+.dsh-kt-sub{font-size:9px;color:rgba(255,255,255,.22);margin-top:3px}
+.dsh-body{padding:16px 20px 20px}
+.dsh-col-title{font-size:9px;letter-spacing:1.6px;text-transform:uppercase;color:rgba(74,222,128,.5);margin-bottom:12px;font-weight:600}
+.dsh-hrow{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.dsh-hrow:last-of-type{margin-bottom:0}
+.dsh-hlbl{font-size:11px;color:#fff;width:48px;text-align:right;flex-shrink:0;font-weight:500}
+.dsh-htrack{flex:1;background:rgba(255,255,255,.05);border-radius:20px;height:16px;position:relative;overflow:hidden}
+.dsh-hfill{height:100%;border-radius:20px;position:absolute;left:0;top:0;width:0;transition:width 1s cubic-bezier(.34,1.4,.64,1);background:linear-gradient(90deg,#052e16,#16a34a,#4ade80)}
+.dsh-hrep{height:100%;border-radius:20px;position:absolute;left:0;top:0;width:0;transition:width 1s cubic-bezier(.34,1.4,.64,1) .1s;background:linear-gradient(90deg,rgba(74,222,128,.2),rgba(74,222,128,.12))}
+.dsh-hval{font-size:10px;font-family:var(--mono);color:#4ade80;width:76px;flex-shrink:0;text-align:right;font-weight:600}
+.dsh-lgd{display:flex;gap:12px;margin-top:12px;padding-top:10px;border-top:1px solid rgba(74,222,128,.08);font-size:10px;color:rgba(255,255,255,.32)}
+.dsh-lgd span{display:flex;align-items:center;gap:4px}
+.dsh-lgd i{width:10px;height:4px;border-radius:2px;display:inline-block}
+.dsh-empty{text-align:center;padding:20px;color:rgba(255,255,255,.3);font-size:12px}
 
 .filtro-row{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
 .filtro-row select{height:34px;border:1.5px solid var(--border);border-radius:8px;padding:0 10px;font-family:var(--sans);font-size:12px;color:var(--gray1);background:var(--gray6)}
 
-.card{background:#fff;border:1px solid var(--border);border-radius:var(--radius-xl);overflow:hidden;box-shadow:var(--sh)}
-table{width:100%;border-collapse:collapse;font-size:12px}
-thead tr{background:var(--g1)}
-th{padding:9px 12px;text-align:left;font-size:9px;font-weight:700;color:var(--g6);text-transform:uppercase;letter-spacing:.4px;white-space:nowrap}
-td{padding:9px 12px;border-bottom:1px solid var(--gray6);white-space:nowrap}
-tbody tr:last-child td{border-bottom:none}
-tbody tr:hover{background:var(--g7)}
+.hist-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-xl);overflow:hidden;margin-bottom:14px;box-shadow:var(--sh)}
+.hist-hd{padding:14px 18px;border-bottom:1px solid var(--border);font-size:13px;font-weight:600;color:var(--gray0)}
+.hist-table{width:100%;border-collapse:collapse;font-size:12.5px}
+.hist-table thead tr{background:var(--g1)}
+.hist-table th{padding:9px 14px;text-align:left;font-size:9px;font-weight:700;color:var(--g6);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap}
+.hist-table td{padding:10px 14px;border-bottom:1px solid var(--gray6);vertical-align:middle;white-space:nowrap}
+.hist-table tbody tr:last-child td{border-bottom:none}
+.hist-table tbody tr:hover{background:var(--g7)}
 .mono{font-family:var(--mono)}
-.badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:99px;font-size:9.5px;font-weight:700}
+.badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:99px;font-size:10px;font-weight:600}
 .b-pag{background:var(--g7);color:var(--g2);border:1px solid var(--g6)}
 .b-rec{background:var(--blue-l);color:var(--blue);border:1px solid #93C5FD}
 .b-emit{background:#FFFBEB;color:#D97706;border:1px solid #FDE68A}
-.empty{text-align:center;padding:40px 20px;color:var(--gray3);font-size:13px}
+.hist-empty{text-align:center;padding:28px;color:var(--gray3);font-size:13px}
+
 .erro{text-align:center;padding:60px 20px}
 .erro-ic{font-size:42px;margin-bottom:12px}
 .footer{text-align:center;padding:16px;font-size:11px;color:var(--gray3)}
+.footer strong{color:var(--gray2)}
 
-@media(max-width:600px){
-  .kpi-grid{grid-template-columns:1fr}
+@media(max-width:500px){
+  .dsh-top{grid-template-columns:1fr 1fr}
+  body{padding:12px 10px}
 }
 </style>
 </head>
 <body>
 
-<div class="lov" id="lov"><div class="spin"></div><span>Carregando seu faturamento…</span></div>
+<div class="lov" id="lov"><div class="spin-big"></div><span>Carregando seu faturamento...</span></div>
 
 <div class="wrapper" id="wrapper" style="display:none">
+
   <div class="header-card">
-    <div class="logo-name">Aunord<span>MED</span></div>
-    <div class="medico-nome" id="v-nome">—</div>
-    <div class="medico-crm" id="v-crm"></div>
+    <div class="logo-area">
+      <div class="logo-name">Aunord<span>MED</span></div>
+      <div class="logo-sub">FINANCEIRO</div>
+    </div>
+    <div class="medico-row">
+      <div class="avatar" id="avatar">—</div>
+      <div>
+        <div class="medico-nome" id="v-nome">—</div>
+        <div class="medico-crm" id="v-crm"></div>
+      </div>
+    </div>
   </div>
 
-  <div class="kpi-grid">
-    <div class="kpi"><div class="kpi-lbl">Notas no total</div><div class="kpi-val" id="k-qtd">0</div></div>
-    <div class="kpi"><div class="kpi-lbl">Total bruto faturado</div><div class="kpi-val" id="k-bruto">R$ 0,00</div></div>
-    <div class="kpi"><div class="kpi-lbl">Total repasse (devido)</div><div class="kpi-val" id="k-repasse" style="color:var(--g2)">R$ 0,00</div></div>
+  <div class="dsh" id="dash-card">
+    <div class="dsh-top">
+      <div class="dsh-kt">
+        <div class="dsh-kt-lbl">Notas</div>
+        <div class="dsh-kt-val" id="k-qtd">0</div>
+        <div class="dsh-kt-sub">no total</div>
+      </div>
+      <div class="dsh-kt">
+        <div class="dsh-kt-lbl">Bruto faturado</div>
+        <div class="dsh-kt-val" id="k-bruto">R$ 0,00</div>
+        <div class="dsh-kt-sub">acumulado</div>
+      </div>
+      <div class="dsh-kt">
+        <div class="dsh-kt-lbl">Repasse devido</div>
+        <div class="dsh-kt-val" id="k-repasse" style="color:#86efac">R$ 0,00</div>
+        <div class="dsh-kt-sub">segundo as notas</div>
+      </div>
+    </div>
+    <div class="dsh-body">
+      <div class="dsh-col-title">Faturamento por mês</div>
+      <div id="dash-bars"></div>
+      <div class="dsh-lgd">
+        <span><i style="background:linear-gradient(90deg,#052e16,#4ade80)"></i>Bruto</span>
+        <span><i style="background:rgba(74,222,128,.25)"></i>Repasse</span>
+      </div>
+    </div>
   </div>
 
   <div class="filtro-row">
-    <select id="f-ano" onchange="renderTabela()">
+    <select id="f-ano" onchange="renderTudo()">
       <option value="">Todos os anos</option>
     </select>
-    <select id="f-status" onchange="renderTabela()">
+    <select id="f-status" onchange="renderTudo()">
       <option value="">Todos os status</option>
       <option value="Emitida">Emitida</option>
       <option value="Recebida">Recebida</option>
@@ -87,17 +143,12 @@ tbody tr:hover{background:var(--g7)}
     </select>
   </div>
 
-  <div class="card">
-    <table>
-      <thead><tr>
-        <th>Competência</th><th>Nº NF</th><th>Tomador</th>
-        <th style="text-align:right">Bruto</th><th style="text-align:right">Repasse</th><th>Status</th>
-      </tr></thead>
-      <tbody id="tbody"></tbody>
-    </table>
+  <div class="hist-card">
+    <div class="hist-hd">📋 Histórico de notas fiscais</div>
+    <div id="hist-wrap"></div>
   </div>
 
-  <div class="footer">AunordMED — Gestão financeira médica</div>
+  <div class="footer">Gerado por <strong>AunordMED Financeiro</strong> · <span id="footer-data"></span></div>
 </div>
 
 <script>
@@ -108,6 +159,8 @@ async function sGet(t,q=''){const r=await fetch(`${SUPA_URL}/rest/v1/${t}?${q}`,
 
 const brl=v=>Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmtMes=m=>{if(!m)return'—';const[y,mo]=m.split('-');const ms=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];return`${ms[+mo-1]}/${y}`;};
+const ini=n=>n.split(' ').filter(Boolean).slice(0,2).map(x=>x[0].toUpperCase()).join('');
+const avc=n=>{const cs=['#22994D','#1A56DB','#D97706','#7C3AED','#DB2777','#0891B2'];let h=0;for(let c of n)h=(h*31+c.charCodeAt(0))%cs.length;return cs[Math.abs(h)];};
 
 let notasDoMedico=[];
 
@@ -119,30 +172,56 @@ function mostrarErro(msg){
   document.getElementById('wrapper').innerHTML=`<div class="erro"><div class="erro-ic">❌</div><h3 style="margin-bottom:6px">Link não encontrado</h3><p style="color:var(--gray3);font-size:13px">${msg}</p></div>`;
 }
 
-function renderTabela(){
+function renderHistorico(filtradas){
+  const wrap=document.getElementById('hist-wrap');
+  if(!filtradas.length){wrap.innerHTML=`<div class="hist-empty">Nenhuma nota encontrada.</div>`;return;}
+  wrap.innerHTML=`<table class="hist-table">
+    <thead><tr><th>Competência</th><th>NF</th><th>Tomador</th><th>Bruto</th><th>Repasse</th><th>Status</th></tr></thead>
+    <tbody>${filtradas.map(n=>{
+      const bdg=n.status==='Paga ao médico'?'b-pag':n.status==='Recebida'?'b-rec':'b-emit';
+      return`<tr><td class="mono">${fmtMes(n.comp)}</td><td class="mono" style="font-weight:600">${n.nf||'—'}</td><td>${n.tomador||'—'}</td><td class="mono" style="font-weight:600">R$ ${brl(n._bruto)}</td><td class="mono" style="font-weight:600;color:var(--g2)">R$ ${brl(n._repasse)}</td><td><span class="badge ${bdg}">${n.status}</span></td></tr>`;
+    }).join('')}</tbody>
+  </table>`;
+}
+
+function renderDash(filtradas){
+  const porMes={};
+  filtradas.forEach(n=>{
+    if(!n.comp) return;
+    if(!porMes[n.comp]) porMes[n.comp]={label:fmtMes(n.comp), comp:n.comp, bruto:0, repasse:0};
+    porMes[n.comp].bruto+=n._bruto;
+    porMes[n.comp].repasse+=n._repasse;
+  });
+  const meses=Object.values(porMes).sort((a,b)=>a.comp.localeCompare(b.comp)).slice(-8);
+  const totalBruto=filtradas.reduce((a,n)=>a+n._bruto,0);
+  const totalRepasse=filtradas.reduce((a,n)=>a+n._repasse,0);
+  document.getElementById('k-qtd').textContent=filtradas.length;
+  document.getElementById('k-bruto').textContent='R$ '+brl(totalBruto);
+  document.getElementById('k-repasse').textContent='R$ '+brl(totalRepasse);
+
+  const maxB=Math.max.apply(null, meses.map(m=>m.bruto).concat([1]));
+  const barsEl=document.getElementById('dash-bars');
+  if(!meses.length){ barsEl.innerHTML='<div class="dsh-empty">Sem faturamento no período selecionado</div>'; return; }
+  barsEl.innerHTML=meses.map(m=>{
+    const pB=Math.max(Math.round((m.bruto/maxB)*100),4);
+    const pR=Math.max(Math.round((m.repasse/maxB)*100),2);
+    return `<div class="dsh-hrow"><div class="dsh-hlbl">${m.label}</div><div class="dsh-htrack"><div class="dsh-hfill" style="width:0" data-w="${pB}"></div><div class="dsh-hrep" style="width:0" data-w="${pR}"></div></div><div class="dsh-hval">R$${brl(m.bruto)}</div></div>`;
+  }).join('');
+  requestAnimationFrame(()=>{requestAnimationFrame(()=>{
+    document.querySelectorAll('.dsh-hfill,.dsh-hrep').forEach(el=>{el.style.width=el.dataset.w+'%';});
+  });});
+}
+
+function renderTudo(){
   const ano=document.getElementById('f-ano').value;
   const status=document.getElementById('f-status').value;
   const filtradas=notasDoMedico.filter(n=>{
     if(ano && (!n.comp || !n.comp.startsWith(ano))) return false;
     if(status && n.status!==status) return false;
     return true;
-  });
-  const tbody=document.getElementById('tbody');
-  if(!filtradas.length){
-    tbody.innerHTML=`<tr><td colspan="6"><div class="empty">Nenhuma nota encontrada.</div></td></tr>`;
-    return;
-  }
-  tbody.innerHTML=filtradas.map(n=>{
-    const bdg=n.status==='Paga ao médico'?'b-pag':n.status==='Recebida'?'b-rec':'b-emit';
-    return `<tr>
-      <td class="mono">${fmtMes(n.comp)}</td>
-      <td class="mono" style="font-weight:600">${n.nf||'—'}</td>
-      <td>${n.tomador||'—'}</td>
-      <td class="mono" style="text-align:right;font-weight:600">R$ ${brl(n._bruto)}</td>
-      <td class="mono" style="text-align:right;color:var(--g2);font-weight:700">R$ ${brl(n._repasse)}</td>
-      <td><span class="badge ${bdg}">${n.status}</span></td>
-    </tr>`;
-  }).join('');
+  }).sort((a,b)=>(b.comp||'').localeCompare(a.comp||''));
+  renderDash(filtradas);
+  renderHistorico(filtradas);
 }
 
 async function init(){
@@ -154,6 +233,9 @@ async function init(){
     const medico=meds[0];
     document.getElementById('v-nome').textContent=medico.nome||'—';
     document.getElementById('v-crm').textContent=medico.crm?`CRM ${medico.crm}`:'';
+    document.getElementById('avatar').textContent=ini(medico.nome||'—');
+    document.getElementById('avatar').style.background=avc(medico.nome||'—');
+    document.getElementById('footer-data').textContent=new Date().toLocaleDateString('pt-BR',{day:'2-digit',month:'long',year:'numeric'});
 
     const todasNotas=await sGet('notas_fiscais','order=comp.desc');
     notasDoMedico=[];
@@ -163,17 +245,11 @@ async function init(){
       notasDoMedico.push({...n, _bruto:mn.valor_bruto_medico||0, _repasse:mn.repasse||0});
     });
 
-    const totalBruto=notasDoMedico.reduce((a,n)=>a+n._bruto,0);
-    const totalRepasse=notasDoMedico.reduce((a,n)=>a+n._repasse,0);
-    document.getElementById('k-qtd').textContent=notasDoMedico.length;
-    document.getElementById('k-bruto').textContent='R$ '+brl(totalBruto);
-    document.getElementById('k-repasse').textContent='R$ '+brl(totalRepasse);
-
     const anos=[...new Set(notasDoMedico.map(n=>n.comp?n.comp.slice(0,4):null).filter(Boolean))].sort().reverse();
     const selAno=document.getElementById('f-ano');
     anos.forEach(a=>{const o=document.createElement('option');o.value=a;o.textContent=a;selAno.appendChild(o);});
 
-    renderTabela();
+    renderTudo();
     document.getElementById('lov').classList.add('hide');
     document.getElementById('wrapper').style.display='block';
   }catch(e){
