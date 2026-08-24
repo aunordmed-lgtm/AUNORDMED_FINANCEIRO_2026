@@ -1,88 +1,115 @@
-import { NavLink, useNavigate } from 'react-router-dom'
+import { Routes, Route } from 'react-router-dom'
+import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
-import { useAuth } from '../contexts/AuthContext'
-import { useToast } from './Toast'
+import { Sidebar } from '../components/Sidebar'
+import { Dashboard } from './Dashboard'
+import { Notas } from './Notas'
+import { Pendencias } from './Pendencias'
+import { Medicos } from './Medicos'
+import { Tomadores } from './Tomadores'
+import { Adiantamentos } from './Adiantamentos'
+import { Cashback } from './Cashback'
+import { Comprovante } from './Comprovante'
+import { Comprovantes } from './Comprovantes'
+import { Relatorios } from './Relatorios'
+import { RelatorioGerencial } from './RelatorioGerencial'
+import { FluxoCaixa } from './FluxoCaixa'
+import { Contas } from './Contas'
+import { Impostos } from './Impostos'
+import { DRE } from './DRE'
+import { Configuracoes } from './Configuracoes'
+import { ImportacaoNF } from './ImportacaoNF'
+import { RegimeCaixa } from './RegimeCaixa'
+import { Repasses } from './Repasses'
+import { ConferenciaPDF } from './ConferenciaPDF'
+import { Solicitacoes } from './Solicitacoes'
+import { Gargalos } from './Gargalos'
+import { Documentos } from './Documentos'
 
-const navItems = [
-  { section: 'Principal' },
-  { path: '/', icon: '📊', label: 'Dashboard' },
-  { path: '/gargalos', icon: '⚠️', label: 'Gargalos & Prejuízo', badge: 'gargalo', badgeColor: 'orange' },
-  { path: '/notas', icon: '📄', label: 'Notas fiscais', badge: 'nf', badgeColor: 'ok' },
-  { path: '/importacao', icon: '📥', label: 'Importar NFs' },
-  { path: '/conferencia-pdf', icon: '📋', label: 'Conferência PDF' },
-  { section: 'Pendências' },
-  { path: '/solicitacoes', icon: '📨', label: 'Solicitações', badge: 'solic', badgeColor: 'orange' },
-  { path: '/pendencias', icon: '🔔', label: 'Pendências', badge: 'pend' },
-  { section: 'Financeiro' },
-  { path: '/fluxo-caixa', icon: '💰', label: 'Fluxo de caixa' },
-  { path: '/repasses', icon: '💸', label: 'Repasses' },
-  { path: '/contas', icon: '📅', label: 'Contas', badge: 'contas', badgeColor: 'blue' },
-  { path: '/adiantamentos', icon: '💵', label: 'Adiantamentos', badge: 'adt', badgeColor: 'orange' },
-  { path: '/cashback', icon: '🎁', label: 'Cashback', badge: 'cb', badgeColor: 'purple' },
-  { section: 'Fiscal' },
-  { path: '/impostos', icon: '🧾', label: 'Impostos' },
-  { path: '/dre', icon: '📑', label: 'DRE' },
-  { section: 'Cadastros' },
-  { path: '/medicos', icon: '👨‍⚕️', label: 'Médicos', badge: 'med', badgeColor: 'ok' },
-  { path: '/tomadores', icon: '🏥', label: 'Tomadores' },
-  { section: 'Relatórios' },
-  { path: '/relatorio-gerencial', icon: '📋', label: 'Gerencial' },
-  { path: '/comprovantes', icon: '🧾', label: 'Comprovantes', badge: 'comp', badgeColor: 'ok' },
-  { path: '/relatorios', icon: '📈', label: 'Por médico' },
-  { path: '/regime-caixa', icon: '💳', label: 'Regime de caixa' },
-  { section: 'Sistema' },
-  { path: '/documentos', icon: '📎', label: 'Documentos' },
-  { path: '/configuracoes', icon: '⚙️', label: 'Configurações' },
-]
+async function safeQueryCustom(fn) {
+  try {
+    const { data, error } = await fn()
+    if (error) return []
+    return data || []
+  } catch { return [] }
+}
 
-export function Sidebar({ badges = {} }) {
-  const { user } = useAuth()
-  const { toast } = useToast()
-  const navigate = useNavigate()
+export function AppLayout() {
+  const [data, setData] = useState({
+    notas: [], medicos: [], tomadores: [], adiantamentos: [],
+    cashbacks: [], comprovantes: [], contas: [], impostos: [], solicitacoes: [], extratoBancario: [], documentosEmpresa: []
+  })
+  const [loading, setLoading] = useState(true)
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut()
-    toast('Sessão encerrada.')
-    navigate('/login')
+  const carregar = useCallback(async () => {
+    const [notas, medicos, tomadores, adiantamentos, cashbacks, comprovantes, contas, impostos, solicitacoes, extratoBancario, documentosEmpresa] = await Promise.all([
+      safeQueryCustom(() => supabase.from('notas_fiscais').select('*').order('criado_em', { ascending: false })),
+      safeQueryCustom(() => supabase.from('medicos').select('*').order('nome')),
+      safeQueryCustom(() => supabase.from('tomadores').select('*').order('nome')),
+      safeQueryCustom(() => supabase.from('adiantamentos').select('*').order('criado_em', { ascending: false })),
+      safeQueryCustom(() => supabase.from('cashback').select('*').order('criado_em', { ascending: false })),
+      safeQueryCustom(() => supabase.from('comprovantes').select('*').order('criado_em', { ascending: false })),
+      safeQueryCustom(() => supabase.from('contas_pagar_receber').select('*').order('vencimento')),
+      safeQueryCustom(() => supabase.from('impostos').select('*').order('competencia', { ascending: false })),
+      safeQueryCustom(() => supabase.from('solicitacoes_medicos').select('*').order('criado_em', { ascending: false })),
+      safeQueryCustom(() => supabase.from('extrato_bancario').select('*').order('data', { ascending: false })),
+      safeQueryCustom(() => supabase.from('documentos_empresa').select('*')),
+    ])
+    setData({ notas, medicos, tomadores, adiantamentos, cashbacks, comprovantes, contas, impostos, solicitacoes, extratoBancario, documentosEmpresa })
+    setLoading(false)
+  }, [])
+
+  useEffect(() => { carregar() }, [carregar])
+
+  const badges = {
+    nf: data.notas.length,
+    pend: data.notas.filter(n => n.status === 'Emitida' || n.status === 'Recebida').length,
+    med: data.medicos.length,
+    comp: data.comprovantes.length,
+    adt: data.adiantamentos.filter(a => a.status === 'pendente').length,
+    cb: data.cashbacks.filter(c => c.status === 'pendente').length,
+    contas: data.contas.filter(c => c.status === 'pendente').length,
+    solic: data.solicitacoes.filter(s => s.status === 'Pendente').length,
+    gargalo: data.notas.filter(n => n.status === 'Emitida').length + data.notas.filter(n => n.valor_recebido_real != null && n.valor_recebido_real < (n.recebido || 0) - 0.01).length,
   }
 
+  if (loading) return (
+    <div className="loading-full">
+      <div className="spinner spinner-lg" />
+      <span>Carregando AunordMED...</span>
+    </div>
+  )
+
+  const props = { ...data, onRefresh: carregar }
+
   return (
-    <div className="sidebar">
-      <div className="sidebar-logo">
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '4px 0' }}>
-          <div style={{ fontSize: 20, fontWeight: 800, color: '#fff', letterSpacing: '-0.5px', lineHeight: 1 }}>
-            Aunord<span style={{ color: 'var(--g7)' }}>MED</span>
-          </div>
-          <div style={{ fontSize: 9, color: 'rgba(255,255,255,.3)', letterSpacing: '2px', marginTop: 4, textTransform: 'uppercase' }}>
-            Financeiro
-          </div>
-        </div>
-      </div>
-      <nav style={{ padding: '8px 8px', flex: 1, overflowY: 'auto' }}>
-        {navItems.map((item, i) => {
-          if (item.section) return <div key={i} className="nav-section">{item.section}</div>
-          const count = badges[item.badge] || 0
-          return (
-            <NavLink key={item.path} to={item.path} end={item.path === '/'}
-              className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
-              <span className="nav-icon">{item.icon}</span>
-              {item.label}
-              {count > 0 && <span className={`nav-badge ${item.badgeColor || ''}`}>{count}</span>}
-            </NavLink>
-          )
-        })}
-      </nav>
-      <div className="sidebar-bottom">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px' }}>
-          <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'var(--g5)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: '#fff', flexShrink: 0 }}>
-            {user?.email?.[0]?.toUpperCase() || 'U'}
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 11, color: 'rgba(255,255,255,.45)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user?.email}</div>
-          </div>
-          <button onClick={handleLogout} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,.3)', fontSize: 16, padding: 2 }} title="Sair">⏻</button>
-        </div>
-        <div className="sidebar-ver">AunordMED Financeiro v2.0</div>
+    <div className="app-layout">
+      <Sidebar badges={badges} />
+      <div className="main">
+        <Routes>
+          <Route path="/" element={<Dashboard {...props} />} />
+          <Route path="/notas" element={<Notas {...props} />} />
+          <Route path="/importacao" element={<ImportacaoNF {...props} />} />
+          <Route path="/solicitacoes" element={<Solicitacoes {...props} />} />
+          <Route path="/gargalos" element={<Gargalos {...props} />} />
+          <Route path="/documentos" element={<Documentos {...props} />} />
+          <Route path="/pendencias" element={<Pendencias {...props} />} />
+          <Route path="/medicos" element={<Medicos {...props} />} />
+          <Route path="/tomadores" element={<Tomadores {...props} />} />
+          <Route path="/adiantamentos" element={<Adiantamentos {...props} />} />
+          <Route path="/cashback" element={<Cashback {...props} />} />
+          <Route path="/comprovantes" element={<Comprovantes {...props} />} />
+          <Route path="/relatorios" element={<Relatorios {...props} />} />
+          <Route path="/relatorio-gerencial" element={<RelatorioGerencial {...props} />} />
+          <Route path="/regime-caixa" element={<RegimeCaixa {...props} />} />
+          <Route path="/fluxo-caixa" element={<FluxoCaixa {...props} />} />
+          <Route path="/contas" element={<Contas {...props} />} />
+          <Route path="/impostos" element={<Impostos {...props} />} />
+          <Route path="/dre" element={<DRE {...props} />} />
+          <Route path="/configuracoes" element={<Configuracoes {...props} />} />
+          <Route path="/repasses" element={<Repasses {...props} />} />
+          <Route path="/conferencia-pdf" element={<ConferenciaPDF {...props} />} />
+        </Routes>
       </div>
     </div>
   )
