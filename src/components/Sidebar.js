@@ -66,13 +66,21 @@ export function Sidebar({ badges = {} }) {
       <nav style={{ padding: '8px 8px', flex: 1, overflowY: 'auto' }}>
         {navItems.map((item, i) => {
           if (item.section) return <div key={i} className="nav-section">{item.section}</div>
-          const count = badges[item.badge] || 0
+          const temVencidas = item.path === '/notas' && (badges.vencidas || 0) > 0
+          const count = temVencidas ? badges.vencidas : (badges[item.badge] || 0)
+          const cor = temVencidas ? 'red' : item.badgeColor
           return (
             <NavLink key={item.path} to={item.path} end={item.path === '/'}
               className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}>
               <span className="nav-icon">{item.icon}</span>
               {item.label}
-              {count > 0 && <span className={`nav-badge ${item.badgeColor || ''}`}>{count}</span>}
+              {count > 0 && (
+                <span className={`nav-badge ${cor || ''}`}
+                  style={temVencidas ? { background: '#DC2626', color: '#fff' } : undefined}
+                  title={temVencidas ? `${badges.vencidas} nota(s) com prazo vencido, sem baixa` : ''}>
+                  {count}
+                </span>
+              )}
             </NavLink>
           )
         })}
