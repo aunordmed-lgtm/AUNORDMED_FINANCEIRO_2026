@@ -61,6 +61,7 @@ export function AppLayout() {
 
   useEffect(() => { carregar() }, [carregar])
 
+  const hojeISO = new Date().toISOString().split('T')[0]
   const badges = {
     nf: data.notas.length,
     pend: data.notas.filter(n => n.status === 'Emitida' || n.status === 'Recebida').length,
@@ -71,6 +72,7 @@ export function AppLayout() {
     contas: data.contas.filter(c => c.status === 'pendente').length,
     solic: data.solicitacoes.filter(s => s.status === 'Pendente').length,
     gargalo: data.notas.filter(n => n.status === 'Emitida').length + data.notas.filter(n => n.valor_recebido_real != null && n.valor_recebido_real < (n.recebido || 0) - 0.01).length,
+    vencidas: data.notas.filter(n => n.status !== 'Paga ao médico' && n.data_vencimento && n.data_vencimento.split('T')[0] < hojeISO).length,
   }
 
   if (loading) return (
