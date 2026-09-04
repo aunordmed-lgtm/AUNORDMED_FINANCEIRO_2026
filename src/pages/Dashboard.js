@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect, useRef } from 'react'
+import { Link } from 'react-router-dom'
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { brl, pct, fmtMes } from '../lib/helpers'
 
@@ -82,6 +83,8 @@ export function Dashboard({ notas = [], medicos = [], adiantamentos = [], cashba
   const adtPend = adiantamentos.filter(a => a.status === 'pendente').reduce((s, a) => s + a.valor, 0)
   const cbPend = cashbacks.filter(c => c.status === 'pendente').reduce((s, c) => s + c.valor, 0)
   const contasVenc = contas?.filter(c => c.status === 'pendente' && c.vencimento <= new Date().toISOString().split('T')[0]).length || 0
+  const notasVencidas = notas.filter(n => n.status !== 'Paga ao médico' && n.data_vencimento && n.data_vencimento.split('T')[0] < new Date().toISOString().split('T')[0])
+  const notasVencidasValor = notasVencidas.reduce((a, n) => a + (n.bruto || 0), 0)
 
   return (
     <div className="page-content">
@@ -171,6 +174,14 @@ export function Dashboard({ notas = [], medicos = [], adiantamentos = [], cashba
           </div>
         ))}
       </div>
+
+      {notasVencidas.length > 0 && (
+        <Link to="/notas" style={{ textDecoration: 'none' }}>
+          <div style={{ background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: 'var(--radius-lg)', padding: '12px 16px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: '#B91C1C', cursor: 'pointer' }}>
+            🚨 <strong>{notasVencidas.length}</strong> nota(s) com prazo de pagamento <strong>vencido</strong> e sem baixa ({brl(notasVencidasValor)} em aberto) — clique pra ver na aba "📅 Prazos"
+          </div>
+        </Link>
+      )}
 
       {contasVenc > 0 && (
         <div style={{ background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: 'var(--radius-lg)', padding: '12px 16px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: '#B91C1C' }}>
