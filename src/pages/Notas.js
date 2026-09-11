@@ -132,8 +132,11 @@ function calcNota(bruto, medsSel) {
   const cofins = b * ALIQ_COFINS
   let totalRepasse = 0
   const meds = medsSel.map(ms => {
+    const valor = parseFloat(ms.valor || 0)
+    // Se o modo for "líquido", o valor digitado JÁ é o repasse final — não aplica retenção.
+    // Se for "bruto" (padrão), calcula o repasse descontando a retenção %.
     const ret = parseFloat(ms.ret) / 100
-    const repasse = parseFloat(ms.valor || 0) * (1 - ret)
+    const repasse = ms.modoValor === 'liquido' ? valor : valor * (1 - ret)
     totalRepasse += repasse
     return { ...ms, repasse }
   })
@@ -148,6 +151,8 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
   const [fPlanCompAte, setFPlanCompAte] = useState('')
   const [fPlanCaixa, setFPlanCaixa] = useState('') // '' | 'pago' | 'pendente'
   const [fPlanMedico, setFPlanMedico] = useState('')
+  const [fPrazoSituacao, setFPrazoSituacao] = useState('') // '' | 'vencida' | 'vence_breve' | 'em_dia' | 'paga'
+  const [fPrazoTomador, setFPrazoTomador] = useState('')
   const [editandoPlanId, setEditandoPlanId] = useState(null)
   const [editFormPlan, setEditFormPlan] = useState({ comp: '', nf: '', tomador: '', medico: '', bruto: '', retencao: '', status: '', dataPagamento: '' })
   const [salvandoPlan, setSalvandoPlan] = useState(false)
@@ -164,7 +169,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
   const [sortKey, setSortKey] = useState('criado_em')
   const [sortDir, setSortDir] = useState('desc')
   const [medSel, setMedSel] = useState([])
-  const [form, setForm] = useState({ nf: '', tomador: '', comp: '', mes_recebimento: '', valor_recebido_real: '', data_pagamento: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
+  const [form, setForm] = useState({ nf: '', tomador: '', comp: '', mes_recebimento: '', valor_recebido_real: '', data_pagamento: '', data_vencimento: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
   // Importação Excel médicos
   const [importPreview, setImportPreview] = useState([])
   const [importErro, setImportErro] = useState('')
@@ -262,6 +267,46 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
     bruto: a.bruto + l.bruto, repasse: a.repasse + l.repasse, pago: a.pago + (l.pago ? l.repasse : 0),
   }), { bruto: 0, repasse: 0, pago: 0 }), [linhasPlanilha])
 
+  // ── ABA PRAZOS: situação de cada nota em relação à data de vencimento ──
+  function situacaoPrazo(nota) {
+    if (nota.status === 'Paga ao médico') return 'paga'
+    if (!nota.data_vencimento) return 'sem_prazo'
+    const hoje = new Date(); hoje.setHours(0, 0, 0, 0)
+    const venc = new Date(nota.data_vencimento.split('T')[0] + 'T00:00:00')
+    const dias = Math.round((venc - hoje) / 86400000)
+    if (dias < 0) return 'vencida'
+    if (dias <= 5) return 'vence_breve'
+    return 'em_dia'
+  }
+
+  function diasParaVencimento(nota) {
+    if (!nota.data_vencimento) return null
+    const hoje = new Date(); hoje.setHours(0, 0, 0, 0)
+    const venc = new Date(nota.data_vencimento.split('T')[0] + 'T00:00:00')
+    return Math.round((venc - hoje) / 86400000)
+  }
+
+  const linhasPrazos = useMemo(() => {
+    let out = notas.map(n => ({ nota: n, situacao: situacaoPrazo(n), dias: diasParaVencimento(n) }))
+    if (fPrazoSituacao) out = out.filter(l => l.situacao === fPrazoSituacao)
+    if (fPrazoTomador) out = out.filter(l => l.nota.tomador === fPrazoTomador)
+    // Ordena: vencidas primeiro (mais vencida no topo), depois vence em breve, depois o resto
+    const ordem = { vencida: 0, vence_breve: 1, sem_prazo: 2, em_dia: 3, paga: 4 }
+    out.sort((a, b) => {
+      const diffOrdem = (ordem[a.situacao] ?? 9) - (ordem[b.situacao] ?? 9)
+      if (diffOrdem !== 0) return diffOrdem
+      return (a.dias ?? 999) - (b.dias ?? 999)
+    })
+    return out
+  }, [notas, fPrazoSituacao, fPrazoTomador])
+
+  const resumoPrazos = useMemo(() => ({
+    vencidas: notas.filter(n => situacaoPrazo(n) === 'vencida').length,
+    venceBreve: notas.filter(n => situacaoPrazo(n) === 'vence_breve').length,
+    emDia: notas.filter(n => situacaoPrazo(n) === 'em_dia').length,
+    semPrazo: notas.filter(n => situacaoPrazo(n) === 'sem_prazo').length,
+  }), [notas])
+
   const extratoPorMedico = useMemo(() => {
     const m = {}
     extratoBancario.forEach(e => {
@@ -290,6 +335,8 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
       (!busca || n.nf?.toLowerCase().includes(busca.toLowerCase()) || n.tomador?.toLowerCase().includes(busca.toLowerCase())) &&
       (fltStatus === '__diferenca__'
         ? !!(n.mes_recebimento && n.mes_recebimento !== n.comp)
+        : fltStatus === '__prejuizo__'
+        ? (n.margem || 0) < 0
         : (!fltStatus || n.status === fltStatus)) &&
       (!fltCompDe || (n.comp && n.comp >= fltCompDe)) &&
       (!fltCompAte || (n.comp && n.comp <= fltCompAte)) &&
@@ -351,7 +398,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
 
   const abrirNova = () => {
     setEditando(null)
-    setForm({ nf: '', tomador: '', comp: '', mes_recebimento: '', valor_recebido_real: '', data_pagamento: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
+    setForm({ nf: '', tomador: '', comp: '', mes_recebimento: '', valor_recebido_real: '', data_pagamento: '', data_vencimento: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
     setMedSel([])
     setAbaModal('dados')
     setImportPreview([])
@@ -361,8 +408,8 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
 
   const abrirEditar = (nota) => {
     setEditando(nota)
-    setForm({ nf: nota.nf || '', tomador: nota.tomador || '', comp: nota.comp || '', mes_recebimento: nota.mes_recebimento || '', valor_recebido_real: nota.valor_recebido_real ?? '', data_pagamento: nota.data_pagamento?.split('T')[0] || '', emissao: nota.emissao?.split('T')[0] || '', status: nota.status || 'Emitida', obs: nota.obs || '', bruto: nota.bruto || '' })
-    setMedSel(nota.medicos_nota?.map(mn => ({ nome: mn.nome, crm: mn.crm || '', ret: mn.retencao_individual || 13, valor: mn.valor_bruto_medico || '' })) || [])
+    setForm({ nf: nota.nf || '', tomador: nota.tomador || '', comp: nota.comp || '', mes_recebimento: nota.mes_recebimento || '', valor_recebido_real: nota.valor_recebido_real ?? '', data_pagamento: nota.data_pagamento?.split('T')[0] || '', data_vencimento: nota.data_vencimento?.split('T')[0] || '', emissao: nota.emissao?.split('T')[0] || '', status: nota.status || 'Emitida', obs: nota.obs || '', bruto: nota.bruto || '' })
+    setMedSel(nota.medicos_nota?.map(mn => ({ nome: mn.nome, crm: mn.crm || '', ret: mn.retencao_individual || 13, valor: mn.valor_bruto_medico || '', modoValor: mn.modo_valor || 'bruto' })) || [])
     setAbaModal('dados')
     setImportPreview([])
     setImportErro('')
@@ -378,7 +425,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
     const jaAlocado = medSel.reduce((a, m) => a + (parseFloat(m.valor) || 0), 0)
     const restante = brutoTotal - jaAlocado
     const valorSugerido = restante > 0 ? restante.toFixed(2) : ''
-    setMedSel(prev => [...prev, { nome, crm: med?.crm || '', ret: med?.retencao || 13, valor: valorSugerido }])
+    setMedSel(prev => [...prev, { nome, crm: med?.crm || '', ret: med?.retencao || 13, valor: valorSugerido, modoValor: 'bruto' }])
   }
 
   // Importação Excel médicos
@@ -462,7 +509,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
 
   const confirmarImport = () => {
     const novos = importMedPreview => importMedPreview.map(m => ({
-      nome: m.nomeCadastrado || m.nome, crm: m.crm || '', ret: m.ret, valor: String(m.valor)
+      nome: m.nomeCadastrado || m.nome, crm: m.crm || '', ret: m.ret, valor: String(m.valor), modoValor: 'bruto'
     }))
     setMedSel(novos(importPreview))
     setAbaModal('dados')
@@ -473,16 +520,16 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
 
   const salvar = async () => {
     if (!form.nf || !form.tomador || !form.bruto) { toast('Preencha NF, tomador e valor bruto.', 'error'); return }
-    if (medSel.length > 0) {
-      const soma = medSel.reduce((a, m) => a + (parseFloat(m.valor) || 0), 0)
-      if (Math.abs(soma - parseFloat(form.bruto)) > 0.01) { toast('Soma dos valores deve ser igual ao bruto.', 'error'); return }
-    }
+    // Removido o bloqueio antigo que exigia soma dos médicos === bruto da nota.
+    // Agora é permitido o total repassado ser maior (ou menor) que o bruto — o aviso
+    // visual continua aparecendo, mas não impede mais de salvar.
     const calc = calcNota(form.bruto, medSel)
-    const medicos_nota = medSel.length ? medSel.map(ms => ({
+    const medicos_nota = calc.meds.length ? calc.meds.map(ms => ({
       nome: ms.nome, crm: ms.crm || '',
       valor_bruto_medico: parseFloat(ms.valor) || 0,
       retencao_individual: parseFloat(ms.ret) || 13,
-      repasse: parseFloat(ms.valor || 0) * (1 - parseFloat(ms.ret || 13) / 100)
+      modo_valor: ms.modoValor || 'bruto',
+      repasse: ms.repasse,
     })) : []
     const payload = {
       ...form, bruto: calc.bruto, recebido: calc.recebido, total_repasse: calc.totalRepasse,
@@ -491,6 +538,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
       mes_recebimento: form.mes_recebimento || null,
       valor_recebido_real: form.valor_recebido_real !== '' ? parseFloat(form.valor_recebido_real) : null,
       data_pagamento: form.data_pagamento || null,
+      data_vencimento: form.data_vencimento || null,
       medicos_nota: medicos_nota.length ? medicos_nota : null, nomes_medicos: medSel.map(m => m.nome).join(', ') || null
     }
     setLoading(true)
@@ -871,49 +919,54 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
 
   async function obterOuCriarComprovanteEmissao(nota, mn) {
     try {
-      const existentes = await supabase.from('comprovantes')
+      const { data: existentes, error: erroSelect } = await supabase.from('comprovantes')
         .select('token')
         .eq('nf_id', nota.id)
         .eq('medico_nome', mn.nome)
         .eq('tipo', 'emissao')
         .limit(1)
-      if (existentes?.data?.length) return existentes.data[0].token
+      if (erroSelect) throw erroSelect
+      if (existentes?.length) return { token: existentes[0].token, erro: null }
       const token = uid()
-      await supabase.from('comprovantes').insert({
+      const { error: erroInsert } = await supabase.from('comprovantes').insert({
         token, nf_id: nota.id, medico_nome: mn.nome, tomador: nota.tomador,
         valor_repasse: mn.repasse || 0, competencia: nota.comp || null,
         tipo: 'emissao',
         dados_extras: { nf: nota.nf, bruto: mn.valor_bruto_medico || 0 },
       })
-      return token
+      if (erroInsert) throw erroInsert
+      return { token, erro: null }
     } catch (e) {
-      return null
+      return { token: null, erro: e.message || 'Erro desconhecido ao salvar o comprovante.' }
     }
   }
 
   async function montarMensagemAvisoEmissao(nota, mn) {
-    const token = await obterOuCriarComprovanteEmissao(nota, mn)
+    const { token, erro } = await obterOuCriarComprovanteEmissao(nota, mn)
     const link = token ? `${BASE_URL_COMPROVANTES}/comprovante_emissao.html?token=${token}` : null
-    return `🏥 *AunordMED Financeiro*\nOlá, Dr(a). *${mn.nome}*!\nSua nota fiscal *#${nota.nf || '—'}* foi *emitida*.\n🏢 *Tomador:* ${nota.tomador || '—'}\n📅 *Competência:* ${fmtMes(nota.comp)}\n💰 *Valor bruto:* R$ ${(mn.valor_bruto_medico || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}${link ? `\n📄 Acesse:\n${link}` : ''}\n\n_Este é só um aviso de emissão — o repasse ainda será processado e comunicado separadamente._\n_AunordMED — Gestão financeira médica_`
+    const msg = `🏥 *AunordMED Financeiro*\nOlá, Dr(a). *${mn.nome}*!\nSua nota fiscal *#${nota.nf || '—'}* foi *emitida*.\n🏢 *Tomador:* ${nota.tomador || '—'}\n📅 *Competência:* ${fmtMes(nota.comp)}\n💰 *Valor bruto:* R$ ${(mn.valor_bruto_medico || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}${link ? `\n📄 Acesse:\n${link}` : ''}\n\n_Este é só um aviso de emissão — o repasse ainda será processado e comunicado separadamente._\n_AunordMED — Gestão financeira médica_`
+    return { msg, erro }
   }
 
   async function enviarAvisoEmissao(nota, mn) {
     const med = medicos.find(m => m.nome === mn.nome)
     const tel = med?.telefone_whatsapp || med?.telefone
     toast('Preparando aviso…')
-    const msg = await montarMensagemAvisoEmissao(nota, mn)
+    const { msg, erro } = await montarMensagemAvisoEmissao(nota, mn)
+    if (erro) { toast('⚠️ O link não pôde ser salvo (' + erro + ') — mensagem gerada sem link.', 'error') }
     if (!tel) {
       navigator.clipboard.writeText(msg).then(() => toast(`${mn.nome} sem WhatsApp cadastrado — mensagem copiada.`, 'error'))
       return
     }
     window.open(`https://wa.me/${tel.replace(/\D/g, '')}?text=${encodeURIComponent(msg)}`, '_blank')
-    toast('Abrindo WhatsApp…')
+    if (!erro) toast('Abrindo WhatsApp…')
   }
 
   async function copiarAvisoEmissao(nota, mn) {
     toast('Preparando aviso…')
-    const msg = await montarMensagemAvisoEmissao(nota, mn)
-    navigator.clipboard.writeText(msg).then(() => toast('Mensagem copiada!')).catch(() => toast('Erro ao copiar.', 'error'))
+    const { msg, erro } = await montarMensagemAvisoEmissao(nota, mn)
+    if (erro) { toast('⚠️ O link não pôde ser salvo (' + erro + ') — mensagem copiada sem link.', 'error') }
+    navigator.clipboard.writeText(msg).then(() => { if (!erro) toast('Mensagem copiada!') }).catch(() => toast('Erro ao copiar.', 'error'))
   }
 
   function abrirAvisoEmissao(nota) {
@@ -959,7 +1012,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
       `}</style>
       {/* Abas principais */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 14, borderBottom: '1px solid var(--border)' }}>
-        {[['lista','📄 Notas fiscais'],['relatorio','📊 Relatório por período'],['extrato','🏦 Extrato'],['planilha','📋 Planilha']].map(([id, label]) => (
+        {[['lista','📄 Notas fiscais'],['relatorio','📊 Relatório por período'],['extrato','🏦 Extrato'],['planilha','📋 Planilha'],['prazos','📅 Prazos']].map(([id, label]) => (
           <button key={id} onClick={() => setAba(id)} style={{ padding: '8px 18px', border: 'none', borderBottom: aba===id?'2px solid var(--g5)':'2px solid transparent', background: 'none', cursor: 'pointer', fontSize: 13, fontWeight: aba===id?600:400, color: aba===id?'var(--g3)':'var(--n5)', fontFamily: 'var(--sans)' }}>
             {label}
           </button>
@@ -984,6 +1037,11 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
         <div className="card">
           <div className="table-toolbar">
             <span className="table-title">Notas fiscais</span>
+            {notas.filter(n => (n.margem || 0) < 0).length > 0 && (
+              <span style={{ background: '#FEF2F2', color: '#DC2626', border: '1px solid #FCA5A5', borderRadius: 99, padding: '3px 10px', fontSize: 11, fontWeight: 700 }}>
+                🚨 {notas.filter(n => (n.margem || 0) < 0).length} nota(s) em prejuízo
+              </span>
+            )}
             <input className="search-input" placeholder="🔍 Buscar NF ou tomador…" value={busca} onChange={e => setBusca(e.target.value)} />
             <select className="filter-select" value={fltStatus} onChange={e => setFltStatus(e.target.value)}>
               <option value="">Todos status</option>
@@ -991,6 +1049,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
               <option value="Recebida">Recebida</option>
               <option value="Paga ao médico">Paga ao médico</option>
               <option value="__diferenca__">⚠️ Recebida com diferença</option>
+              <option value="__prejuizo__">🚨 Em prejuízo (margem negativa)</option>
             </select>
             <input type="month" className="filter-select" style={{ width: 140 }} value={fltCompDe} onChange={e => setFltCompDe(e.target.value)} title="Competência de" />
             <input type="month" className="filter-select" style={{ width: 140 }} value={fltCompAte} onChange={e => setFltCompAte(e.target.value)} title="Competência até" />
@@ -1064,7 +1123,10 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
                     <td className="mono" style={{ fontWeight:600 }}>{brl(n.bruto)}</td>
                     <td className="mono" style={{ color:'var(--blue)' }}>{brl(n.recebido)}</td>
                     <td className="mono" style={{ color:'var(--n4)' }}>{brl(n.total_repasse||0)}</td>
-                    <td className="mono" style={{ color:'var(--g3)', fontWeight:600 }}>{brl(n.margem)}</td>
+                    <td className="mono" style={{ color: n.margem < 0 ? '#DC2626' : 'var(--g3)', fontWeight:600 }}>
+                      {brl(n.margem)}
+                      {n.margem < 0 && <div style={{ fontSize:9, color:'#DC2626', fontWeight:700, whiteSpace:'nowrap' }}>⚠️ Prejuízo</div>}
+                    </td>
                     <td>
                       <select style={{ height:26, fontSize:11, width:130, border:'1px solid var(--border)', borderRadius:6, padding:'0 6px', fontFamily:'var(--sans)' }}
                         value={n.status} onChange={e => alterarStatus(n.id, e.target.value)}>
@@ -1175,7 +1237,10 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
                       <td className="mono">{fmtMes(n.comp)}</td>
                       <td className="mono" style={{textAlign:'right',fontWeight:600}}>{brl(n.bruto)}</td>
                       <td className="mono" style={{textAlign:'right',color:'var(--blue)'}}>{brl(n.recebido)}</td>
-                      <td className="mono" style={{textAlign:'right',color:'var(--g3)',fontWeight:600}}>{brl(n.margem)}</td>
+                      <td className="mono" style={{textAlign:'right',color: n.margem < 0 ? '#DC2626' : 'var(--g3)',fontWeight:600}}>
+                        {brl(n.margem)}
+                        {n.margem < 0 && <span style={{ fontSize:9, color:'#DC2626', fontWeight:700, marginLeft:4, whiteSpace:'nowrap' }}>⚠️</span>}
+                      </td>
                       <td><span className={`badge ${n.status==='Paga ao médico'?'badge-ok':n.status==='Recebida'?'badge-rec':'badge-emit'}`}>{n.status}</span></td>
                     </tr>
                   ))}
@@ -1507,6 +1572,68 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
         </div>
       )}
 
+      {/* ABA PRAZOS */}
+      {aba === 'prazos' && (
+        <div className="card">
+          <div className="table-toolbar" style={{ flexWrap: 'wrap' }}>
+            <span className="table-title">Prazos de pagamento</span>
+            <select className="filter-select" value={fPrazoSituacao} onChange={e => setFPrazoSituacao(e.target.value)}>
+              <option value="">Todas situações</option>
+              <option value="vencida">🔴 Vencida</option>
+              <option value="vence_breve">🟠 Vence em até 5 dias</option>
+              <option value="em_dia">🟢 Em dia</option>
+              <option value="sem_prazo">⚪ Sem prazo definido</option>
+              <option value="paga">✅ Já paga</option>
+            </select>
+            <select className="filter-select" value={fPrazoTomador} onChange={e => setFPrazoTomador(e.target.value)}>
+              <option value="">Todos tomadores</option>
+              {tomadoresLista.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+            {(fPrazoSituacao || fPrazoTomador) && (
+              <button className="btn btn-ghost btn-xs" onClick={() => { setFPrazoSituacao(''); setFPrazoTomador('') }}>Limpar filtros</button>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', gap: 10, padding: '10px 16px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+            <span className="badge badge-emit" style={{ background: '#FEF2F2', color: '#DC2626', border: '1px solid #FECACA' }}>🔴 {resumoPrazos.vencidas} vencida(s)</span>
+            <span className="badge badge-emit">🟠 {resumoPrazos.venceBreve} vence(m) em breve</span>
+            <span className="badge badge-ok">🟢 {resumoPrazos.emDia} em dia</span>
+            <span className="badge" style={{ background: 'var(--n9)', color: 'var(--n4)', border: '1px solid var(--border)' }}>⚪ {resumoPrazos.semPrazo} sem prazo definido</span>
+          </div>
+
+          <div className="table-wrap">
+            <table>
+              <thead><tr>
+                <th>NF</th><th>Tomador</th><th>Médicos</th><th>Bruto</th>
+                <th>Vencimento</th><th>Situação</th><th>Status</th><th>Ações</th>
+              </tr></thead>
+              <tbody>
+                {linhasPrazos.length === 0 && (
+                  <tr><td colSpan={8}><div className="empty-state" style={{ padding: '1.5rem' }}><p>Nenhuma nota encontrada para os filtros selecionados.</p></div></td></tr>
+                )}
+                {linhasPrazos.map((l, i) => {
+                  const n = l.nota
+                  const corSit = l.situacao === 'vencida' ? '#DC2626' : l.situacao === 'vence_breve' ? '#D97706' : l.situacao === 'paga' ? 'var(--g3)' : l.situacao === 'em_dia' ? 'var(--g3)' : 'var(--n5)'
+                  const txtSit = l.situacao === 'vencida' ? `🔴 Vencida há ${Math.abs(l.dias)} dia(s)` : l.situacao === 'vence_breve' ? `🟠 Vence em ${l.dias} dia(s)` : l.situacao === 'em_dia' ? `🟢 Em dia (${l.dias} dias)` : l.situacao === 'paga' ? '✅ Já paga' : '⚪ Sem prazo definido'
+                  return (
+                    <tr key={i}>
+                      <td className="mono" style={{ fontWeight: 600 }}>{n.nf || '—'}</td>
+                      <td style={{ maxWidth: 200 }}>{n.tomador || '—'}</td>
+                      <td style={{ fontSize: 11 }}>{n.nomes_medicos || '—'}</td>
+                      <td className="mono" style={{ fontWeight: 600 }}>{brl(n.bruto)}</td>
+                      <td className="mono">{n.data_vencimento ? n.data_vencimento.split('-').reverse().join('/') : '—'}</td>
+                      <td style={{ color: corSit, fontWeight: 600, fontSize: 12 }}>{txtSit}</td>
+                      <td><span className={`badge ${n.status === 'Paga ao médico' ? 'badge-ok' : n.status === 'Recebida' ? 'badge-rec' : 'badge-emit'}`}>{n.status}</span></td>
+                      <td><button className="btn btn-ghost btn-xs" onClick={() => abrirEditar(n)}>✏️ Editar</button></td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* MODAL NOTA */}
       <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editando ? 'Editar nota fiscal' : 'Nova nota fiscal'} size="wide"
         footer={<>
@@ -1529,7 +1656,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
         {abaModal === 'dados' && (
           <>
             <div className="form-grid">
-              {[['nf','Nº da NF *','text','00001'],['tomador','Tomador *','text','Unimed…'],['comp','Competência (emissão)','month',''],['mes_recebimento','Mês de recebimento','month',''],['data_pagamento','Data de pagamento (exata)','date',''],['emissao','Data emissão','date',''],['obs','Observações','text','']].map(([k,l,t,p]) => (
+              {[['nf','Nº da NF *','text','00001'],['tomador','Tomador *','text','Unimed…'],['comp','Competência (emissão)','month',''],['mes_recebimento','Mês de recebimento','month',''],['data_vencimento','Prazo de pagamento (vencimento)','date',''],['data_pagamento','Data de pagamento (exata)','date',''],['emissao','Data emissão','date',''],['obs','Observações','text','']].map(([k,l,t,p]) => (
                 <div key={k} className="field">
                   <label>{l}</label>
                   <input type={t} value={form[k]} onChange={e => setForm(f=>({...f,[k]:e.target.value}))} placeholder={p}/>
@@ -1562,7 +1689,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
                 <div className="med-picker-header">
                   <span>Médico</span>
                   <div style={{ display:'flex', gap:36, fontSize:10, color:'var(--n5)' }}>
-                    <span style={{ width:100, textAlign:'center' }}>Valor (R$)</span>
+                    <span style={{ width:100, textAlign:'center' }}>Valor / Modo</span>
                     <span style={{ width:100, textAlign:'center' }}>% Retenção</span>
                     <span style={{ width:30 }}></span>
                   </div>
@@ -1575,11 +1702,19 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
                         <div style={{ fontWeight:500, fontSize:12 }}>{ms.nome}</div>
                         <div style={{ fontSize:10, color:'var(--n5)' }}>{ms.crm}</div>
                       </div>
-                      <input type="number" value={ms.valor} placeholder="0,00" min="0" step="0.01"
-                        style={{ height:28, fontSize:12, fontFamily:'var(--mono)', textAlign:'right', padding:'0 6px', border:'1px solid var(--border)', borderRadius:6 }}
-                        onChange={e => setMedSel(prev => prev.map((m,j) => j===i?{...m,valor:e.target.value}:m))}/>
-                      <input type="number" value={ms.ret} min="0" max="100" step="0.01"
-                        style={{ height:28, fontSize:12, fontFamily:'var(--mono)', textAlign:'right', padding:'0 6px', border:'1px solid var(--border)', borderRadius:6 }}
+                      <div>
+                        <input type="number" value={ms.valor} placeholder="0,00" min="0" step="0.01"
+                          style={{ height:28, fontSize:12, fontFamily:'var(--mono)', textAlign:'right', padding:'0 6px', border:'1px solid var(--border)', borderRadius:6, width:'100%' }}
+                          onChange={e => setMedSel(prev => prev.map((m,j) => j===i?{...m,valor:e.target.value}:m))}/>
+                        <select value={ms.modoValor || 'bruto'}
+                          style={{ height:20, fontSize:9, width:'100%', marginTop:2, border:'1px solid var(--border)', borderRadius:4, fontFamily:'var(--sans)', color:'var(--n5)' }}
+                          onChange={e => setMedSel(prev => prev.map((m,j) => j===i?{...m,modoValor:e.target.value}:m))}>
+                          <option value="bruto">Bruto (aplica %)</option>
+                          <option value="liquido">Já é líquido</option>
+                        </select>
+                      </div>
+                      <input type="number" value={ms.ret} min="0" max="100" step="0.01" disabled={ms.modoValor === 'liquido'}
+                        style={{ height:28, fontSize:12, fontFamily:'var(--mono)', textAlign:'right', padding:'0 6px', border:'1px solid var(--border)', borderRadius:6, opacity: ms.modoValor === 'liquido' ? 0.4 : 1 }}
                         onChange={e => setMedSel(prev => prev.map((m,j) => j===i?{...m,ret:e.target.value}:m))}/>
                       <button style={{ background:'none', border:'none', cursor:'pointer', color:'var(--n5)', fontSize:14 }}
                         onClick={() => setMedSel(prev => prev.filter((_,j) => j!==i))}>✕</button>
@@ -1598,18 +1733,33 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
                     {medicosOrdenados.map(m => <option key={m.id} value={m.nome}>{m.crm?`${m.nome} (${m.crm})`:m.nome}</option>)}
                   </datalist>
                 </div>
-                {medSel.length>0 && form.bruto && Math.abs(medSel.reduce((a,m)=>a+(parseFloat(m.valor)||0),0)-parseFloat(form.bruto))>0.01 && (
-                  <div className="pct-warn">⚠️ Soma dos valores deve ser igual ao valor bruto total</div>
-                )}
+                {medSel.length>0 && form.bruto && Math.abs(medSel.reduce((a,m)=>a+(parseFloat(m.valor)||0),0)-parseFloat(form.bruto))>0.01 && (() => {
+                  const soma = medSel.reduce((a,m)=>a+(parseFloat(m.valor)||0),0)
+                  const dif = soma - parseFloat(form.bruto)
+                  return (
+                    <div className="pct-warn">
+                      ℹ️ A soma dos valores dos médicos ({brl(soma)}) é {dif > 0 ? 'maior' : 'menor'} que o bruto da nota ({brl(parseFloat(form.bruto))}) em {brl(Math.abs(dif))} — isso é permitido, só um aviso.
+                    </div>
+                  )
+                })()}
               </div>
             </div>
 
             <div className="computed-row">
               <div className="computed-box blue"><div className="computed-label">Recebido (−6,15%)</div><div className="computed-value">{brl(v.recebido)}</div></div>
               <div className="computed-box"><div className="computed-label">Total repasse</div><div className="computed-value">{brl(v.totalRepasse)}</div></div>
-              <div className="computed-box highlight"><div className="computed-label">Margem empresa</div><div className="computed-value">{brl(v.margem)}</div></div>
-              <div className="computed-box"><div className="computed-label">% Margem</div><div className="computed-value">{pct(v.pct_margem)}</div></div>
+              <div className="computed-box" style={v.margem < 0 ? { background: '#FEF2F2', border: '1px solid #FCA5A5' } : undefined}>
+                <div className="computed-label" style={v.margem < 0 ? { color: '#B91C1C' } : undefined}>{v.margem < 0 ? '⚠️ Nota em prejuízo' : 'Margem empresa'}</div>
+                <div className="computed-value" style={v.margem < 0 ? { color: '#DC2626' } : undefined}>{brl(v.margem)}</div>
+              </div>
+              <div className="computed-box"><div className="computed-label">% Margem</div><div className="computed-value" style={v.margem < 0 ? { color: '#DC2626' } : undefined}>{pct(v.pct_margem)}</div></div>
             </div>
+
+            {v.margem < 0 && (
+              <div style={{ background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: 'var(--radius-lg)', padding: '12px 16px', marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: '#B91C1C', fontWeight: 600 }}>
+                🚨 Essa nota está em <strong>prejuízo de {brl(Math.abs(v.margem))}</strong> — o repasse aos médicos é maior que o valor líquido recebido pela empresa. Confira se os valores estão corretos antes de salvar.
+              </div>
+            )}
 
             <div style={{ marginTop:10 }}>
               <div style={{ fontSize:10, fontWeight:700, color:'var(--n4)', textTransform:'uppercase', letterSpacing:.4, marginBottom:6 }}>
