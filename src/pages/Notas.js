@@ -237,6 +237,50 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
     return pago < (nota.total_repasse || 0) - 0.01
   }
 
+  // ── ABA CONCILIAÇÃO: situação de cada nota, extrato x sistema, num só lugar ──
+  const [fConcSituacao, setFConcSituacao] = useState('') // '' | 'bate' | 'menor' | 'maior' | 'sem_pagamento'
+  const [fConcTomador, setFConcTomador] = useState('')
+  const [fConcMedico, setFConcMedico] = useState('')
+  const [fConcCompDe, setFConcCompDe] = useState('')
+  const [fConcCompAte, setFConcCompAte] = useState('')
+
+  function situacaoConciliacao(nota) {
+    const esperado = nota.total_repasse || 0
+    const pago = pagoRealPorNf[nota.nf] || 0
+    if (!pago) return 'sem_pagamento'
+    if (Math.abs(pago - esperado) <= 0.01) return 'bate'
+    if (pago < esperado) return 'menor'
+    return 'maior'
+  }
+
+  const linhasConciliacao = useMemo(() => {
+    let out = notas.map(n => ({
+      nota: n,
+      esperado: n.total_repasse || 0,
+      pago: pagoRealPorNf[n.nf] || 0,
+      situacao: situacaoConciliacao(n),
+    }))
+    if (fConcSituacao) out = out.filter(l => l.situacao === fConcSituacao)
+    if (fConcTomador) out = out.filter(l => l.nota.tomador === fConcTomador)
+    if (fConcMedico) out = out.filter(l => (l.nota.medicos_nota || []).some(mn => mn.nome === fConcMedico))
+    if (fConcCompDe) out = out.filter(l => l.nota.comp && l.nota.comp >= fConcCompDe)
+    if (fConcCompAte) out = out.filter(l => l.nota.comp && l.nota.comp <= fConcCompAte)
+    // Prioriza mostrar primeiro o que não bate, depois o que está sem pagamento, depois o que bate
+    const ordem = { menor: 0, maior: 1, sem_pagamento: 2, bate: 3 }
+    out.sort((a, b) => (ordem[a.situacao] ?? 9) - (ordem[b.situacao] ?? 9))
+    return out
+  }, [notas, pagoRealPorNf, fConcSituacao, fConcTomador, fConcMedico, fConcCompDe, fConcCompAte])
+
+  const resumoConciliacao = useMemo(() => {
+    const todas = notas.map(n => situacaoConciliacao(n))
+    return {
+      bate: todas.filter(s => s === 'bate').length,
+      menor: todas.filter(s => s === 'menor').length,
+      maior: todas.filter(s => s === 'maior').length,
+      semPagamento: todas.filter(s => s === 'sem_pagamento').length,
+    }
+  }, [notas, pagoRealPorNf])
+
   const medicosDasNotas = useMemo(() => {
     const s = new Set()
     notas.forEach(n => (n.medicos_nota || []).forEach(mn => mn.nome && s.add(mn.nome)))
@@ -1039,7 +1083,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
       `}</style>
       {/* Abas principais */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 14, borderBottom: '1px solid var(--border)' }}>
-        {[['lista','📄 Notas fiscais'],['relatorio','📊 Relatório por período'],['extrato','🏦 Extrato'],['planilha','📋 Planilha'],['prazos','📅 Prazos']].map(([id, label]) => (
+        {[['lista','📄 Notas fiscais'],['relatorio','📊 Relatório por período'],['extrato','🏦 Extrato'],['planilha','📋 Planilha'],['prazos','📅 Prazos'],['conciliacao','🔄 Conciliação']].map(([id, label]) => (
           <button key={id} onClick={() => setAba(id)} style={{ padding: '8px 18px', border: 'none', borderBottom: aba===id?'2px solid var(--g5)':'2px solid transparent', background: 'none', cursor: 'pointer', fontSize: 13, fontWeight: aba===id?600:400, color: aba===id?'var(--g3)':'var(--n5)', fontFamily: 'var(--sans)' }}>
             {label}
           </button>
@@ -1661,6 +1705,80 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
                       <td style={{ color: corSit, fontWeight: 600, fontSize: 12 }}>{txtSit}</td>
                       <td><span className={`badge ${n.status === 'Paga ao médico' ? 'badge-ok' : n.status === 'Recebida' ? 'badge-rec' : 'badge-emit'}`}>{n.status}</span></td>
                       <td><button className="btn btn-ghost btn-xs" onClick={() => abrirEditar(n)}>✏️ Editar</button></td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ABA CONCILIAÇÃO */}
+      {aba === 'conciliacao' && (
+        <div className="card">
+          <div className="table-toolbar" style={{ flexWrap: 'wrap' }}>
+            <span className="table-title">Conciliação — extrato x sistema</span>
+            <select className="filter-select" value={fConcSituacao} onChange={e => setFConcSituacao(e.target.value)}>
+              <option value="">Todas situações</option>
+              <option value="menor">📉 Paga a menor</option>
+              <option value="maior">📈 Paga a maior</option>
+              <option value="sem_pagamento">⚪ Sem pagamento registrado</option>
+              <option value="bate">✅ Bate certinho</option>
+            </select>
+            <select className="filter-select" value={fConcTomador} onChange={e => setFConcTomador(e.target.value)}>
+              <option value="">Todos tomadores</option>
+              {tomadoresLista.map(t => <option key={t} value={t}>{t}</option>)}
+            </select>
+            <select className="filter-select" value={fConcMedico} onChange={e => setFConcMedico(e.target.value)}>
+              <option value="">Todos médicos</option>
+              {medicosCadastradosDasNotas.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <input type="month" className="filter-select" style={{ width: 140 }} value={fConcCompDe} onChange={e => setFConcCompDe(e.target.value)} title="Competência de" />
+            <input type="month" className="filter-select" style={{ width: 140 }} value={fConcCompAte} onChange={e => setFConcCompAte(e.target.value)} title="Competência até" />
+            {(fConcSituacao || fConcTomador || fConcMedico || fConcCompDe || fConcCompAte) && (
+              <button className="btn btn-ghost btn-xs" onClick={() => { setFConcSituacao(''); setFConcTomador(''); setFConcMedico(''); setFConcCompDe(''); setFConcCompAte('') }}>Limpar filtros</button>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', gap: 10, padding: '10px 16px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+            <span className="badge badge-ok">✅ {resumoConciliacao.bate} bate(m) certinho</span>
+            <span className="badge" style={{ background: '#FFFBEB', color: '#D97706', border: '1px solid #FDE68A' }}>📉 {resumoConciliacao.menor} paga(s) a menor</span>
+            <span className="badge" style={{ background: '#EFF6FF', color: '#1D4ED8', border: '1px solid #BFDBFE' }}>📈 {resumoConciliacao.maior} paga(s) a maior</span>
+            <span className="badge" style={{ background: 'var(--n9)', color: 'var(--n4)', border: '1px solid var(--border)' }}>⚪ {resumoConciliacao.semPagamento} sem pagamento registrado</span>
+          </div>
+
+          <div className="table-wrap">
+            <table>
+              <thead><tr>
+                <th>NF</th><th>Tomador</th><th>Médicos</th><th>Competência</th>
+                <th style={{textAlign:'right'}}>Repasse esperado</th><th style={{textAlign:'right'}}>Pago real (extrato)</th>
+                <th style={{textAlign:'right'}}>Diferença</th><th>Situação</th>
+              </tr></thead>
+              <tbody>
+                {linhasConciliacao.length === 0 && (
+                  <tr><td colSpan={8}><div className="empty-state" style={{ padding: '1.5rem' }}><p>Nenhuma nota encontrada para os filtros selecionados.</p></div></td></tr>
+                )}
+                {linhasConciliacao.map((l, i) => {
+                  const dif = l.pago - l.esperado
+                  const cfgSit = {
+                    bate: { cor: 'var(--g3)', txt: '✅ Bate certinho' },
+                    menor: { cor: '#D97706', txt: '📉 Paga a menor' },
+                    maior: { cor: '#1D4ED8', txt: '📈 Paga a maior' },
+                    sem_pagamento: { cor: 'var(--n5)', txt: '⚪ Sem pagamento' },
+                  }[l.situacao]
+                  return (
+                    <tr key={i}>
+                      <td className="mono" style={{ fontWeight: 600 }}>{l.nota.nf || '—'}</td>
+                      <td style={{ maxWidth: 200 }}>{l.nota.tomador || '—'}</td>
+                      <td style={{ fontSize: 11 }}>{l.nota.nomes_medicos || '—'}</td>
+                      <td className="mono">{fmtMes(l.nota.comp)}</td>
+                      <td className="mono" style={{ textAlign: 'right', fontWeight: 600 }}>{brl(l.esperado)}</td>
+                      <td className="mono" style={{ textAlign: 'right', fontWeight: 600, color: 'var(--g2)' }}>{l.pago ? brl(l.pago) : '—'}</td>
+                      <td className="mono" style={{ textAlign: 'right', fontWeight: 700, color: Math.abs(dif) < 0.01 || !l.pago ? 'var(--n4)' : dif < 0 ? '#D97706' : '#1D4ED8' }}>
+                        {l.pago ? `${dif >= 0 ? '+' : '-'}${brl(Math.abs(dif))}` : '—'}
+                      </td>
+                      <td style={{ color: cfgSit.cor, fontWeight: 600, fontSize: 12 }}>{cfgSit.txt}</td>
                     </tr>
                   )
                 })}
