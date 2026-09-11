@@ -131,17 +131,23 @@ function calcNota(bruto, medsSel) {
   const pis = b * ALIQ_PIS
   const cofins = b * ALIQ_COFINS
   let totalRepasse = 0
+  let totalBrutoEquivalente = 0
   const meds = medsSel.map(ms => {
     const valor = parseFloat(ms.valor || 0)
+    const ret = parseFloat(ms.ret) / 100
     // Se o modo for "líquido", o valor digitado JÁ é o repasse final — não aplica retenção.
     // Se for "bruto" (padrão), calcula o repasse descontando a retenção %.
-    const ret = parseFloat(ms.ret) / 100
     const repasse = ms.modoValor === 'liquido' ? valor : valor * (1 - ret)
+    // "Bruto equivalente": pra quem está em modo líquido, traduz de volta pro valor bruto que
+    // teria gerado esse líquido com a alíquota daquele médico — é o que permite comparar
+    // valores líquidos e brutos na mesma base, e detectar líquido "passado a maior".
+    const brutoEquivalente = ms.modoValor === 'liquido' && ret < 1 ? valor / (1 - ret) : valor
     totalRepasse += repasse
-    return { ...ms, repasse }
+    totalBrutoEquivalente += brutoEquivalente
+    return { ...ms, repasse, brutoEquivalente }
   })
   const margem = recebido - totalRepasse
-  return { bruto: b, recebido, totalRepasse, margem, pct_margem: recebido > 0 ? margem / recebido : 0, meds, ir, csll, pis, cofins }
+  return { bruto: b, recebido, totalRepasse, totalBrutoEquivalente, margem, pct_margem: recebido > 0 ? margem / recebido : 0, meds, ir, csll, pis, cofins }
 }
 
 export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
@@ -212,6 +218,25 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
 
   const medicosOrdenados = useMemo(() => [...medicos].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')), [medicos])
   const tomadoresLista = useMemo(() => [...new Set(notas.map(n => n.tomador).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR')), [notas])
+  // Quanto foi realmente pago (segundo o extrato bancário) por número de NF —
+  // usado pra detectar quando uma nota foi paga a menor do que o repasse calculado.
+  const pagoRealPorNf = useMemo(() => {
+    const m = {}
+    extratoBancario.forEach(e => {
+      if (!e.nf) return
+      m[e.nf] = (m[e.nf] || 0) + (e.valor || 0)
+    })
+    return m
+  }, [extratoBancario])
+
+  // "Paga a menor": só faz sentido quando JÁ HOUVE algum pagamento registrado pra essa NF
+  // (senão seria só "ainda não paga", não "paga a menor").
+  function notaPagaAMenor(nota) {
+    const pago = pagoRealPorNf[nota.nf]
+    if (!pago) return false
+    return pago < (nota.total_repasse || 0) - 0.01
+  }
+
   const medicosDasNotas = useMemo(() => {
     const s = new Set()
     notas.forEach(n => (n.medicos_nota || []).forEach(mn => mn.nome && s.add(mn.nome)))
@@ -337,6 +362,8 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
         ? !!(n.mes_recebimento && n.mes_recebimento !== n.comp)
         : fltStatus === '__prejuizo__'
         ? (n.margem || 0) < 0
+        : fltStatus === '__paga_a_menor__'
+        ? notaPagaAMenor(n)
         : (!fltStatus || n.status === fltStatus)) &&
       (!fltCompDe || (n.comp && n.comp >= fltCompDe)) &&
       (!fltCompAte || (n.comp && n.comp <= fltCompAte)) &&
@@ -359,7 +386,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
       return sortDir === 'asc' ? va - vb : vb - va
     })
     return f
-  }, [notas, busca, fltStatus, fltCompDe, fltCompAte, fltTomador, fltMedico, sortKey, sortDir])
+  }, [notas, busca, fltStatus, fltCompDe, fltCompAte, fltTomador, fltMedico, sortKey, sortDir, pagoRealPorNf])
 
   const notasRel = useMemo(() => {
     if (relTipo === 'todos') return notas
@@ -1042,6 +1069,11 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
                 🚨 {notas.filter(n => (n.margem || 0) < 0).length} nota(s) em prejuízo
               </span>
             )}
+            {notas.filter(n => notaPagaAMenor(n)).length > 0 && (
+              <span style={{ background: '#FFFBEB', color: '#D97706', border: '1px solid #FDE68A', borderRadius: 99, padding: '3px 10px', fontSize: 11, fontWeight: 700 }}>
+                📉 {notas.filter(n => notaPagaAMenor(n)).length} nota(s) paga(s) a menor
+              </span>
+            )}
             <input className="search-input" placeholder="🔍 Buscar NF ou tomador…" value={busca} onChange={e => setBusca(e.target.value)} />
             <select className="filter-select" value={fltStatus} onChange={e => setFltStatus(e.target.value)}>
               <option value="">Todos status</option>
@@ -1050,6 +1082,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
               <option value="Paga ao médico">Paga ao médico</option>
               <option value="__diferenca__">⚠️ Recebida com diferença</option>
               <option value="__prejuizo__">🚨 Em prejuízo (margem negativa)</option>
+              <option value="__paga_a_menor__">📉 Paga a menor (extrato)</option>
             </select>
             <input type="month" className="filter-select" style={{ width: 140 }} value={fltCompDe} onChange={e => setFltCompDe(e.target.value)} title="Competência de" />
             <input type="month" className="filter-select" style={{ width: 140 }} value={fltCompAte} onChange={e => setFltCompAte(e.target.value)} title="Competência até" />
@@ -1122,7 +1155,10 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
                     </td>
                     <td className="mono" style={{ fontWeight:600 }}>{brl(n.bruto)}</td>
                     <td className="mono" style={{ color:'var(--blue)' }}>{brl(n.recebido)}</td>
-                    <td className="mono" style={{ color:'var(--n4)' }}>{brl(n.total_repasse||0)}</td>
+                    <td className="mono" style={{ color:'var(--n4)' }}>
+                      {brl(n.total_repasse||0)}
+                      {notaPagaAMenor(n) && <div style={{ fontSize:9, color:'#D97706', fontWeight:700, whiteSpace:'nowrap' }} title={`Pago real: ${brl(pagoRealPorNf[n.nf])}`}>📉 Paga a menor</div>}
+                    </td>
                     <td className="mono" style={{ color: n.margem < 0 ? '#DC2626' : 'var(--g3)', fontWeight:600 }}>
                       {brl(n.margem)}
                       {n.margem < 0 && <div style={{ fontSize:9, color:'#DC2626', fontWeight:700, whiteSpace:'nowrap' }}>⚠️ Prejuízo</div>}
@@ -1696,7 +1732,9 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
                 </div>
                 <div className="med-picker-list">
                   {medSel.length===0 && <div style={{ padding:12, textAlign:'center', color:'var(--n6)', fontSize:11 }}>Nenhum médico adicionado</div>}
-                  {medSel.map((ms,i) => (
+                  {medSel.map((ms,i) => {
+                    const brutoEq = v.meds?.[i]?.brutoEquivalente
+                    return (
                     <div key={i} className="med-picker-row">
                       <div>
                         <div style={{ fontWeight:500, fontSize:12 }}>{ms.nome}</div>
@@ -1712,14 +1750,21 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
                           <option value="bruto">Bruto (aplica %)</option>
                           <option value="liquido">Já é líquido</option>
                         </select>
+                        {ms.modoValor === 'liquido' && brutoEq > 0 && (
+                          <div style={{ fontSize:9, color:'var(--n5)', marginTop:2, textAlign:'right' }} title="Valor bruto que teria gerado esse líquido, com a % de retenção informada ao lado">
+                            ≈ Bruto equiv.: R$ {brutoEq.toLocaleString('pt-BR',{minimumFractionDigits:2})}
+                          </div>
+                        )}
                       </div>
-                      <input type="number" value={ms.ret} min="0" max="100" step="0.01" disabled={ms.modoValor === 'liquido'}
-                        style={{ height:28, fontSize:12, fontFamily:'var(--mono)', textAlign:'right', padding:'0 6px', border:'1px solid var(--border)', borderRadius:6, opacity: ms.modoValor === 'liquido' ? 0.4 : 1 }}
+                      <input type="number" value={ms.ret} min="0" max="100" step="0.01"
+                        title={ms.modoValor === 'liquido' ? '% usada só pra calcular o bruto equivalente de referência' : '% de retenção aplicada sobre o bruto'}
+                        style={{ height:28, fontSize:12, fontFamily:'var(--mono)', textAlign:'right', padding:'0 6px', border:'1px solid var(--border)', borderRadius:6 }}
                         onChange={e => setMedSel(prev => prev.map((m,j) => j===i?{...m,ret:e.target.value}:m))}/>
                       <button style={{ background:'none', border:'none', cursor:'pointer', color:'var(--n5)', fontSize:14 }}
                         onClick={() => setMedSel(prev => prev.filter((_,j) => j!==i))}>✕</button>
                     </div>
-                  ))}
+                    )
+                  })}
                 </div>
                 <div className="med-picker-add">
                   <input type="text" list="med-datalist" placeholder="🔍 Digite o nome do médico para adicionar..." id="med-search-input" autoComplete="off"
@@ -1733,12 +1778,12 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
                     {medicosOrdenados.map(m => <option key={m.id} value={m.nome}>{m.crm?`${m.nome} (${m.crm})`:m.nome}</option>)}
                   </datalist>
                 </div>
-                {medSel.length>0 && form.bruto && Math.abs(medSel.reduce((a,m)=>a+(parseFloat(m.valor)||0),0)-parseFloat(form.bruto))>0.01 && (() => {
-                  const soma = medSel.reduce((a,m)=>a+(parseFloat(m.valor)||0),0)
+                {medSel.length>0 && form.bruto && Math.abs(v.totalBrutoEquivalente - parseFloat(form.bruto))>0.01 && (() => {
+                  const soma = v.totalBrutoEquivalente
                   const dif = soma - parseFloat(form.bruto)
                   return (
                     <div className="pct-warn">
-                      ℹ️ A soma dos valores dos médicos ({brl(soma)}) é {dif > 0 ? 'maior' : 'menor'} que o bruto da nota ({brl(parseFloat(form.bruto))}) em {brl(Math.abs(dif))} — isso é permitido, só um aviso.
+                      ℹ️ A soma dos valores dos médicos, em bruto equivalente, ({brl(soma)}) é {dif > 0 ? 'maior' : 'menor'} que o bruto da nota ({brl(parseFloat(form.bruto))}) em {brl(Math.abs(dif))} — isso é permitido, só um aviso.
                     </div>
                   )
                 })()}
