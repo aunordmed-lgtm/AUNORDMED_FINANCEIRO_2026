@@ -25,6 +25,7 @@ import { ConferenciaPDF } from './ConferenciaPDF'
 import { Solicitacoes } from './Solicitacoes'
 import { Gargalos } from './Gargalos'
 import { Documentos } from './Documentos'
+import { Governanca } from './Governanca'
 
 async function safeQueryCustom(fn) {
   try {
@@ -95,6 +96,7 @@ export function AppLayout() {
           <Route path="/solicitacoes" element={<Solicitacoes {...props} />} />
           <Route path="/gargalos" element={<Gargalos {...props} />} />
           <Route path="/documentos" element={<Documentos {...props} />} />
+          <Route path="/governanca" element={<Governanca {...props} />} />
           <Route path="/pendencias" element={<Pendencias {...props} />} />
           <Route path="/medicos" element={<Medicos {...props} />} />
           <Route path="/tomadores" element={<Tomadores {...props} />} />
