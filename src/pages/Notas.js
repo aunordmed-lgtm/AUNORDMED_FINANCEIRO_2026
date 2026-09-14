@@ -150,7 +150,7 @@ function calcNota(bruto, medsSel) {
   return { bruto: b, recebido, totalRepasse, totalBrutoEquivalente, margem, pct_margem: recebido > 0 ? margem / recebido : 0, meds, ir, csll, pis, cofins }
 }
 
-export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
+export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], onRefresh }) {
   const { toast } = useToast()
   const [aba, setAba] = useState('lista')
   const [fPlanCompDe, setFPlanCompDe] = useState('')
@@ -175,7 +175,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
   const [sortKey, setSortKey] = useState('criado_em')
   const [sortDir, setSortDir] = useState('desc')
   const [medSel, setMedSel] = useState([])
-  const [form, setForm] = useState({ nf: '', tomador: '', comp: '', mes_recebimento: '', valor_recebido_real: '', data_pagamento: '', data_vencimento: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
+  const [form, setForm] = useState({ nf: '', tomador: '', tomador_cnpj: '', comp: '', mes_recebimento: '', valor_recebido_real: '', data_pagamento: '', data_vencimento: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
   // Importação Excel médicos
   const [importPreview, setImportPreview] = useState([])
   const [importErro, setImportErro] = useState('')
@@ -217,7 +217,22 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
   }, [])
 
   const medicosOrdenados = useMemo(() => [...medicos].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR')), [medicos])
+
+  // Tomadores cadastrados, ordenados, com CNPJ — usado no formulário da nota pra
+  // evitar confusão entre filiais que compartilham o mesmo nome.
+  const tomadoresOrdenados = useMemo(() => [...tomadores].sort((a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR')), [tomadores])
+
+  function buscarTomadorPorNomeExato(nome) {
+    return tomadores.find(t => t.nome === nome)
+  }
   const tomadoresLista = useMemo(() => [...new Set(notas.map(n => n.tomador).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR')), [notas])
+
+  // Rótulo do tomador no filtro, mostrando o CNPJ do cadastro quando existir —
+  // ajuda a diferenciar filiais que usam o mesmo nome.
+  function rotuloTomador(nome) {
+    const cad = tomadores.find(t => t.nome === nome)
+    return cad?.cnpj ? `${nome} — CNPJ ${cad.cnpj}` : nome
+  }
   // Quanto foi realmente pago (segundo o extrato bancário) por número de NF —
   // usado pra detectar quando uma nota foi paga a menor do que o repasse calculado.
   const pagoRealPorNf = useMemo(() => {
@@ -283,7 +298,10 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
 
   const medicosDasNotas = useMemo(() => {
     const s = new Set()
-    notas.forEach(n => (n.medicos_nota || []).forEach(mn => mn.nome && s.add(mn.nome)))
+    notas.forEach(n => {
+      const meds = n.medicos_nota?.length ? n.medicos_nota : (n.nomes_medicos ? n.nomes_medicos.split(',').map(nm => ({ nome: nm.trim() })) : [])
+      meds.forEach(mn => mn.nome && s.add(mn.nome))
+    })
     return [...s].sort((a, b) => a.localeCompare(b, 'pt-BR'))
   }, [notas])
 
@@ -412,7 +430,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
       (!fltCompDe || (n.comp && n.comp >= fltCompDe)) &&
       (!fltCompAte || (n.comp && n.comp <= fltCompAte)) &&
       (!fltTomador || n.tomador === fltTomador) &&
-      (!fltMedico || (n.medicos_nota || []).some(mn => mn.nome === fltMedico))
+      (!fltMedico || (n.medicos_nota?.length ? n.medicos_nota : (n.nomes_medicos ? n.nomes_medicos.split(',').map(nm => ({ nome: nm.trim() })) : [])).some(mn => mn.nome === fltMedico))
     )
     f = [...f].sort((a, b) => {
       let va = a[sortKey], vb = b[sortKey]
@@ -469,7 +487,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
 
   const abrirNova = () => {
     setEditando(null)
-    setForm({ nf: '', tomador: '', comp: '', mes_recebimento: '', valor_recebido_real: '', data_pagamento: '', data_vencimento: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
+    setForm({ nf: '', tomador: '', tomador_cnpj: '', comp: '', mes_recebimento: '', valor_recebido_real: '', data_pagamento: '', data_vencimento: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
     setMedSel([])
     setAbaModal('dados')
     setImportPreview([])
@@ -479,7 +497,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
 
   const abrirEditar = (nota) => {
     setEditando(nota)
-    setForm({ nf: nota.nf || '', tomador: nota.tomador || '', comp: nota.comp || '', mes_recebimento: nota.mes_recebimento || '', valor_recebido_real: nota.valor_recebido_real ?? '', data_pagamento: nota.data_pagamento?.split('T')[0] || '', data_vencimento: nota.data_vencimento?.split('T')[0] || '', emissao: nota.emissao?.split('T')[0] || '', status: nota.status || 'Emitida', obs: nota.obs || '', bruto: nota.bruto || '' })
+    setForm({ nf: nota.nf || '', tomador: nota.tomador || '', tomador_cnpj: nota.tomador_cnpj || '', comp: nota.comp || '', mes_recebimento: nota.mes_recebimento || '', valor_recebido_real: nota.valor_recebido_real ?? '', data_pagamento: nota.data_pagamento?.split('T')[0] || '', data_vencimento: nota.data_vencimento?.split('T')[0] || '', emissao: nota.emissao?.split('T')[0] || '', status: nota.status || 'Emitida', obs: nota.obs || '', bruto: nota.bruto || '' })
     setMedSel(nota.medicos_nota?.map(mn => ({ nome: mn.nome, crm: mn.crm || '', ret: mn.retencao_individual || 13, valor: mn.valor_bruto_medico || '', modoValor: mn.modo_valor || 'bruto' })) || [])
     setAbaModal('dados')
     setImportPreview([])
@@ -1132,7 +1150,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
             <input type="month" className="filter-select" style={{ width: 140 }} value={fltCompAte} onChange={e => setFltCompAte(e.target.value)} title="Competência até" />
             <select className="filter-select" value={fltTomador} onChange={e => setFltTomador(e.target.value)}>
               <option value="">Todos tomadores</option>
-              {tomadoresLista.map(t => <option key={t} value={t}>{t}</option>)}
+              {tomadoresLista.map(t => <option key={t} value={t}>{rotuloTomador(t)}</option>)}
             </select>
             <select className="filter-select" value={fltMedico} onChange={e => setFltMedico(e.target.value)}>
               <option value="">Todos médicos</option>
@@ -1667,7 +1685,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
             </select>
             <select className="filter-select" value={fPrazoTomador} onChange={e => setFPrazoTomador(e.target.value)}>
               <option value="">Todos tomadores</option>
-              {tomadoresLista.map(t => <option key={t} value={t}>{t}</option>)}
+              {tomadoresLista.map(t => <option key={t} value={t}>{rotuloTomador(t)}</option>)}
             </select>
             {(fPrazoSituacao || fPrazoTomador) && (
               <button className="btn btn-ghost btn-xs" onClick={() => { setFPrazoSituacao(''); setFPrazoTomador('') }}>Limpar filtros</button>
@@ -1728,7 +1746,7 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
             </select>
             <select className="filter-select" value={fConcTomador} onChange={e => setFConcTomador(e.target.value)}>
               <option value="">Todos tomadores</option>
-              {tomadoresLista.map(t => <option key={t} value={t}>{t}</option>)}
+              {tomadoresLista.map(t => <option key={t} value={t}>{rotuloTomador(t)}</option>)}
             </select>
             <select className="filter-select" value={fConcMedico} onChange={e => setFConcMedico(e.target.value)}>
               <option value="">Todos médicos</option>
@@ -1810,7 +1828,29 @@ export function Notas({ notas, medicos, extratoBancario = [], onRefresh }) {
         {abaModal === 'dados' && (
           <>
             <div className="form-grid">
-              {[['nf','Nº da NF *','text','00001'],['tomador','Tomador *','text','Unimed…'],['comp','Competência (emissão)','month',''],['mes_recebimento','Mês de recebimento','month',''],['data_vencimento','Prazo de pagamento (vencimento)','date',''],['data_pagamento','Data de pagamento (exata)','date',''],['emissao','Data emissão','date',''],['obs','Observações','text','']].map(([k,l,t,p]) => (
+              <div className="field">
+                <label>Nº da NF *</label>
+                <input type="text" value={form.nf} onChange={e => setForm(f=>({...f,nf:e.target.value}))} placeholder="00001"/>
+              </div>
+              <div className="field">
+                <label>Tomador *</label>
+                <input type="text" list="tomador-datalist" value={form.tomador} placeholder="Digite ou selecione o tomador…"
+                  onChange={e => {
+                    const nome = e.target.value
+                    const encontrado = buscarTomadorPorNomeExato(nome)
+                    setForm(f => ({ ...f, tomador: nome, tomador_cnpj: encontrado?.cnpj || '' }))
+                  }}/>
+                <datalist id="tomador-datalist">
+                  {tomadoresOrdenados.map(t => <option key={t.id} value={t.nome}>{t.cnpj ? `${t.nome} — CNPJ ${t.cnpj}` : t.nome}</option>)}
+                </datalist>
+                {form.tomador_cnpj && (
+                  <div style={{ fontSize: 11, color: 'var(--n5)', marginTop: 3 }}>CNPJ: {form.tomador_cnpj}</div>
+                )}
+                {form.tomador && !form.tomador_cnpj && (
+                  <div style={{ fontSize: 11, color: '#D97706', marginTop: 3 }}>⚠️ Esse tomador não está no cadastro (sem CNPJ vinculado) — confira se não é uma filial de nome parecido.</div>
+                )}
+              </div>
+              {[['comp','Competência (emissão)','month',''],['mes_recebimento','Mês de recebimento','month',''],['data_vencimento','Prazo de pagamento (vencimento)','date',''],['data_pagamento','Data de pagamento (exata)','date',''],['emissao','Data emissão','date',''],['obs','Observações','text','']].map(([k,l,t,p]) => (
                 <div key={k} className="field">
                   <label>{l}</label>
                   <input type={t} value={form[k]} onChange={e => setForm(f=>({...f,[k]:e.target.value}))} placeholder={p}/>
