@@ -70,7 +70,7 @@ export function Adiantamentos({ adiantamentos=[], medicos, onRefresh }) {
           <div className="field form-full"><label>Médico *</label>
             <select value={form.medico_nome} onChange={e=>setForm(f=>({...f,medico_nome:e.target.value}))}>
               <option value="">— selecione —</option>
-              {medicos.map(m=><option key={m.id} value={m.nome}>{m.nome}</option>)}
+              {[...medicos].sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR')).map(m=><option key={m.id} value={m.nome}>{m.nome}</option>)}
             </select>
           </div>
           <div className="field"><label>Valor (R$) *</label><input type="number" className="inp-money" value={form.valor} onChange={e=>setForm(f=>({...f,valor:e.target.value}))} step="0.01" placeholder="0,00"/></div>
