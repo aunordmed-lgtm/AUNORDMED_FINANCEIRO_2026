@@ -295,7 +295,7 @@ export function ImportacaoNF({ medicos, onRefresh }) {
                   <div className="field"><label>Médico</label>
                     <select value={medicoSelecionado} onChange={e => setMedicoSelecionado(e.target.value)}>
                       <option value="">— sem vínculo —</option>
-                      {medicos.map(m => <option key={m.id} value={m.nome}>{m.nome}</option>)}
+                      {[...medicos].sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR')).map(m => <option key={m.id} value={m.nome}>{m.nome}</option>)}
                     </select>
                   </div>
                   <div className="field"><label>% Retenção</label>
