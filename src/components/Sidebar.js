@@ -13,6 +13,7 @@ const navItems = [
   { path: '/conferencia-pdf', icon: '📋', label: 'Conferência PDF' },
   { path: '/gargalos', icon: '⚠️', label: 'Gargalos & Prejuízo', badge: 'gargalo', badgeColor: 'orange' },
   { path: '/solicitacoes', icon: '📨', label: 'Solicitações', badge: 'solic', badgeColor: 'orange' },
+  { path: '/comunicacao', icon: '📣', label: 'Central de Comunicação' },
   { section: 'Financeiro' },
   { path: '/fluxo-caixa', icon: '💰', label: 'Fluxo de caixa' },
   { path: '/contas', icon: '📅', label: 'Contas', badge: 'contas', badgeColor: 'blue' },
