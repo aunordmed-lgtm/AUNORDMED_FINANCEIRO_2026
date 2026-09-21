@@ -4,19 +4,17 @@ import { useAuth } from '../contexts/AuthContext'
 import { useToast } from './Toast'
 
 const navItems = [
-  { section: 'Principal' },
+  { section: 'Visão geral' },
   { path: '/', icon: '📊', label: 'Dashboard' },
   { path: '/governanca', icon: '🏛️', label: 'Painel de Governança' },
-  { path: '/gargalos', icon: '⚠️', label: 'Gargalos & Prejuízo', badge: 'gargalo', badgeColor: 'orange' },
+  { section: 'Notas & faturamento' },
   { path: '/notas', icon: '📄', label: 'Notas fiscais', badge: 'nf', badgeColor: 'ok' },
   { path: '/importacao', icon: '📥', label: 'Importar NFs' },
   { path: '/conferencia-pdf', icon: '📋', label: 'Conferência PDF' },
-  { section: 'Pendências' },
+  { path: '/gargalos', icon: '⚠️', label: 'Gargalos & Prejuízo', badge: 'gargalo', badgeColor: 'orange' },
   { path: '/solicitacoes', icon: '📨', label: 'Solicitações', badge: 'solic', badgeColor: 'orange' },
-  { path: '/pendencias', icon: '🔔', label: 'Pendências', badge: 'pend' },
   { section: 'Financeiro' },
   { path: '/fluxo-caixa', icon: '💰', label: 'Fluxo de caixa' },
-  { path: '/repasses', icon: '💸', label: 'Repasses' },
   { path: '/contas', icon: '📅', label: 'Contas', badge: 'contas', badgeColor: 'blue' },
   { path: '/adiantamentos', icon: '💵', label: 'Adiantamentos', badge: 'adt', badgeColor: 'orange' },
   { path: '/cashback', icon: '🎁', label: 'Cashback', badge: 'cb', badgeColor: 'purple' },
