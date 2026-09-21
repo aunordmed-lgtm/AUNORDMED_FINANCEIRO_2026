@@ -38,6 +38,7 @@ function parseXMLNFSe(xmlText) {
       const numero = getTag(el, 'nNFSe') || getTag(el, 'nDFSe') || `IMPORT-${i+1}`
       const valorBruto = parseFloat(getTag(el, 'vServ') || getTag(el, 'vBC') || '0')
       const tomador = getTagIn(el, 'toma', 'xNome') || 'Tomador não identificado'
+      const tomadorCnpj = getTagIn(el, 'toma', 'CNPJ') || null
       const dCompet = getTag(el, 'dCompet') || getTag(el, 'dhEmi') || ''
       let comp = '', emissao = ''
       if (dCompet) {
@@ -47,7 +48,7 @@ function parseXMLNFSe(xmlText) {
       const vISSQN = parseFloat(getTag(el, 'vISSQN') || '0')
       const discriminacao = getTag(el, 'xDescServ') || ''
       if (valorBruto > 0) {
-        notas.push({ nf: numero, tomador: tomador.substring(0, 100), comp, emissao, bruto: valorBruto, iss_retido: vISSQN, discriminacao: discriminacao.substring(0, 500), status: 'Emitida', origem: 'xml' })
+        notas.push({ nf: numero, tomador: tomador.substring(0, 100), tomadorCnpj, comp, emissao, bruto: valorBruto, iss_retido: vISSQN, discriminacao: discriminacao.substring(0, 500), status: 'Emitida', origem: 'xml' })
       }
     })
     return notas
@@ -68,6 +69,7 @@ function parseExcel(file) {
         const cols = {
           nf: col(['número','numero','nf','nota']),
           tomador: col(['tomador','cliente','razão','razao','nome']),
+          tomadorCnpj: col(['cnpj']),
           valor: col(['valor','bruto','serviço','servico','total']),
           competencia: col(['competência','competencia','período','periodo','mês','mes']),
           emissao: col(['emissão','emissao','data','dt']),
@@ -94,7 +96,7 @@ function parseExcel(file) {
             const emissaoRaw = get(cols.emissao) || row[cols.emissao]
             if (emissaoRaw instanceof Date) emissao = emissaoRaw.toISOString().split('T')[0]
             else if (emissaoRaw) { const d = new Date(emissaoRaw); if (!isNaN(d)) emissao = d.toISOString().split('T')[0] }
-            notas.push({ nf: get(cols.nf) || `IMPORT-${i+1}`, tomador: get(cols.tomador) || 'Não informado', comp: comp || mesAtual(), emissao, bruto: valorBruto, status: get(cols.status) || 'Emitida', origem: 'excel' })
+            notas.push({ nf: get(cols.nf) || `IMPORT-${i+1}`, tomador: get(cols.tomador) || 'Não informado', tomadorCnpj: get(cols.tomadorCnpj) || null, comp: comp || mesAtual(), emissao, bruto: valorBruto, status: get(cols.status) || 'Emitida', origem: 'excel' })
           } catch(e) {}
         })
         resolve(notas)
@@ -173,21 +175,25 @@ export function ImportacaoNF({ medicos, onRefresh }) {
       chaves.add(chave)
 
       try {
+        // Resolve o CNPJ do tomador: usa o que veio do XML/Excel, ou busca no
+        // cadastro já existente — e cadastra automaticamente se ainda não existir.
+        let tomadorCnpjFinal = n.tomadorCnpj || null
+        if (n.tomador && n.tomador !== 'Tomador não identificado' && n.tomador !== 'Não informado') {
+          const { data: tomExist } = await supabase.from('tomadores').select('id, cnpj').eq('nome', n.tomador).single().catch(() => ({ data: null }))
+          if (tomExist) {
+            if (!tomadorCnpjFinal && tomExist.cnpj) tomadorCnpjFinal = tomExist.cnpj
+          } else {
+            await supabase.from('tomadores').insert({ nome: n.tomador, cnpj: tomadorCnpjFinal || null, obs: 'Cadastrado automaticamente via importação de NF' }).catch(() => {})
+          }
+        }
         const recebido = n.bruto * 0.9385
         const medicos_nota = medicoSelecionado ? [{ nome: medicoSelecionado, crm: med?.crm || '', valor_bruto_medico: n.bruto, retencao_individual: retencao, repasse: n.bruto * (1 - retencao/100) }] : []
         const totalRepasse = medicos_nota.reduce((a, m) => a + m.repasse, 0)
         const margem = recebido - totalRepasse
-        const payload = { nf: n.nf, tomador: n.tomador, comp: n.comp, emissao: n.emissao, status: n.status, bruto: n.bruto, recebido, total_repasse: totalRepasse, margem, pct_margem: recebido > 0 ? margem/recebido : 0, medicos_nota: medicos_nota.length ? medicos_nota : null, nomes_medicos: medicoSelecionado || null, obs: n.discriminacao ? `Discriminação: ${n.discriminacao}` : null }
+        const payload = { nf: n.nf, tomador: n.tomador, tomador_cnpj: tomadorCnpjFinal, comp: n.comp, emissao: n.emissao, status: n.status, bruto: n.bruto, recebido, total_repasse: totalRepasse, margem, pct_margem: recebido > 0 ? margem/recebido : 0, medicos_nota: medicos_nota.length ? medicos_nota : null, nomes_medicos: medicoSelecionado || null, obs: n.discriminacao ? `Discriminação: ${n.discriminacao}` : null }
         const { data: nova } = await supabase.from('notas_fiscais').insert(payload).select().single()
         if (medicoSelecionado && nova?.id) {
           await supabase.from('comprovantes').insert({ token: uid(), nf_id: nova.id, medico_nome: medicoSelecionado, medico_crm: med?.crm || null, tomador: n.tomador, valor_repasse: n.bruto * (1 - retencao/100), competencia: n.comp, dados_extras: { nf: n.nf, pix: med?.chave_pix } })
-        }
-        // Auto-cadastrar tomador se não existir
-        if (n.tomador && n.tomador !== 'Tomador não identificado') {
-          const { data: tomExist } = await supabase.from('tomadores').select('id').eq('nome', n.tomador).single().catch(() => ({ data: null }))
-          if (!tomExist) {
-            await supabase.from('tomadores').insert({ nome: n.tomador, obs: 'Cadastrado automaticamente via importação de NF' }).catch(() => {})
-          }
         }
         sucesso++
       } catch(e) { falhas++ }
