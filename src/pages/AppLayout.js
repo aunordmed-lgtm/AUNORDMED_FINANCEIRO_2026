@@ -4,7 +4,6 @@ import { supabase } from '../lib/supabase'
 import { Sidebar } from '../components/Sidebar'
 import { Dashboard } from './Dashboard'
 import { Notas } from './Notas'
-import { Pendencias } from './Pendencias'
 import { Medicos } from './Medicos'
 import { Tomadores } from './Tomadores'
 import { Adiantamentos } from './Adiantamentos'
@@ -20,7 +19,6 @@ import { DRE } from './DRE'
 import { Configuracoes } from './Configuracoes'
 import { ImportacaoNF } from './ImportacaoNF'
 import { RegimeCaixa } from './RegimeCaixa'
-import { Repasses } from './Repasses'
 import { ConferenciaPDF } from './ConferenciaPDF'
 import { Solicitacoes } from './Solicitacoes'
 import { Gargalos } from './Gargalos'
@@ -97,7 +95,6 @@ export function AppLayout() {
           <Route path="/gargalos" element={<Gargalos {...props} />} />
           <Route path="/documentos" element={<Documentos {...props} />} />
           <Route path="/governanca" element={<Governanca {...props} />} />
-          <Route path="/pendencias" element={<Pendencias {...props} />} />
           <Route path="/medicos" element={<Medicos {...props} />} />
           <Route path="/tomadores" element={<Tomadores {...props} />} />
           <Route path="/adiantamentos" element={<Adiantamentos {...props} />} />
@@ -111,7 +108,6 @@ export function AppLayout() {
           <Route path="/impostos" element={<Impostos {...props} />} />
           <Route path="/dre" element={<DRE {...props} />} />
           <Route path="/configuracoes" element={<Configuracoes {...props} />} />
-          <Route path="/repasses" element={<Repasses {...props} />} />
           <Route path="/conferencia-pdf" element={<ConferenciaPDF {...props} />} />
         </Routes>
       </div>
