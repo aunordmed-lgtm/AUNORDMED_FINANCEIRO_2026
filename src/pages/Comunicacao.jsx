@@ -18,6 +18,7 @@ export function Comunicacao({ notas = [], medicos = [], comprovantes = [], onRef
   const { toast } = useToast()
   const [busca, setBusca] = useState('')
   const [modalMsg, setModalMsg] = useState(null) // { titulo, corpo, tel }
+  const [modalEscolhaComprovante, setModalEscolhaComprovante] = useState(null) // { medico, itens }
   const [carregando, setCarregando] = useState(null) // `${medicoId}-${acao}` enquanto processa
 
   const medicosOrdenados = useMemo(() =>
@@ -112,13 +113,18 @@ export function Comunicacao({ notas = [], medicos = [], comprovantes = [], onRef
     setCarregando(null)
   }
 
-  // ── 3) Comprovante de pagamento mais recente já gerado ──
+  // ── 3) Escolher qual comprovante de pagamento enviar ──
   function acaoComprovante(med) {
-    const ultimo = comprovantesPorMedico[med.nome]?.[0]
-    if (!ultimo) { toast('Esse médico ainda não tem nenhum comprovante de pagamento gerado (gere primeiro na aba Comprovantes).', 'error'); return }
-    const link = `${BASE_URL}/comprovante.html?token=${ultimo.token}`
-    const corpo = `🏥 *AunordMED Financeiro*\nOlá, Dr(a). *${med.nome}*!\nSegue o comprovante do seu repasse mais recente:\n📄 Acesse:\n${link}\n\n_AunordMED — Gestão financeira médica_`
-    abrirModalMsg(`Comprovante — ${fmtMes(ultimo.competencia)}`, corpo, med.telefone_whatsapp || med.telefone)
+    const itens = comprovantesPorMedico[med.nome] || []
+    if (!itens.length) { toast('Esse médico ainda não tem nenhum comprovante de pagamento gerado (gere primeiro na aba Comprovantes).', 'error'); return }
+    setModalEscolhaComprovante({ medico: med, itens })
+  }
+
+  function escolherComprovante(med, c) {
+    const link = `${BASE_URL}/comprovante.html?token=${c.token}`
+    const corpo = `🏥 *AunordMED Financeiro*\nOlá, Dr(a). *${med.nome}*!\nSegue o comprovante do seu repasse:\n💰 *Valor:* R$ ${brl(c.valor_repasse)}\n📅 *Competência:* ${fmtMes(c.competencia)}\n📄 Acesse:\n${link}\n\n_AunordMED — Gestão financeira médica_`
+    setModalEscolhaComprovante(null)
+    abrirModalMsg(`Comprovante — ${fmtMes(c.competencia)}`, corpo, med.telefone_whatsapp || med.telefone)
   }
 
   return (
@@ -161,7 +167,7 @@ export function Comunicacao({ notas = [], medicos = [], comprovantes = [], onRef
                         </button>
                         <button className="btn btn-outline btn-xs" style={{ color: 'var(--blue)', borderColor: '#BFDBFE', opacity: temComprovante ? 1 : 0.4 }}
                           onClick={() => acaoComprovante(med)} disabled={!temComprovante}
-                          title={temComprovante ? 'Comprovante de pagamento mais recente' : 'Nenhum comprovante gerado ainda'}>
+                          title={temComprovante ? 'Escolher qual comprovante enviar' : 'Nenhum comprovante gerado ainda'}>
                           🧾 Comprovante
                         </button>
                       </div>
@@ -173,6 +179,24 @@ export function Comunicacao({ notas = [], medicos = [], comprovantes = [], onRef
           </table>
         </div>
       </div>
+
+      {/* MODAL: escolher qual comprovante enviar */}
+      <Modal open={!!modalEscolhaComprovante} onClose={() => setModalEscolhaComprovante(null)} title="Escolha o comprovante"
+        footer={<button className="btn btn-ghost" onClick={() => setModalEscolhaComprovante(null)}>Fechar</button>}>
+        {modalEscolhaComprovante && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {modalEscolhaComprovante.itens.map((c, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>{fmtMes(c.competencia)} · R$ {brl(c.valor_repasse)}</div>
+                  <div style={{ fontSize: 11, color: 'var(--n5)' }}>{c.tomador || '—'} {c.dados_extras?.nf ? `· NF ${c.dados_extras.nf}` : ''}</div>
+                </div>
+                <button className="btn btn-primary btn-sm" onClick={() => escolherComprovante(modalEscolhaComprovante.medico, c)}>Escolher</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Modal>
 
       {/* MODAL: copiar ou enviar por WhatsApp */}
       <Modal open={!!modalMsg} onClose={() => setModalMsg(null)} title={modalMsg?.titulo || ''}
