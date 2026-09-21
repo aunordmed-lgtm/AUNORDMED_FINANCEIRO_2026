@@ -5,9 +5,7 @@ import { Modal } from '../components/Modal'
 import { brl, fmtData, fmtMes, pad } from '../lib/helpers'
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 
-const MESES_LABEL = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez']
-
-export function Comprovantes({ comprovantes=[], medicos, notas=[], extratoBancario=[], onRefresh }) {
+export function Comprovantes({ comprovantes=[], medicos, notas=[], onRefresh }) {
   const { toast } = useToast()
   const [aba, setAba] = useState('comprovantes') // comprovantes | faturamento
   const [busca, setBusca] = useState('')
@@ -21,6 +19,21 @@ export function Comprovantes({ comprovantes=[], medicos, notas=[], extratoBancar
     (!busca || c.medico_nome?.toLowerCase().includes(busca.toLowerCase())) &&
     (!medicoSel || c.medico_nome === medicoSel)
   ), [comprovantes, busca, medicoSel])
+
+  // Comprovantes agrupados por médico — cada grupo já ordenado do mais recente
+  // pro mais antigo, com contagem e valor total do grupo.
+  const comprovantesPorMedico = useMemo(() => {
+    const m = {}
+    filtrados.forEach(c => {
+      const nome = c.medico_nome || '(sem médico)'
+      if (!m[nome]) m[nome] = { medico: nome, itens: [], qtd: 0, total: 0 }
+      m[nome].itens.push(c)
+      m[nome].qtd++
+      m[nome].total += c.valor_repasse || 0
+    })
+    Object.values(m).forEach(g => g.itens.sort((a, b) => (b.criado_em || '').localeCompare(a.criado_em || '')))
+    return Object.values(m).sort((a, b) => a.medico.localeCompare(b.medico, 'pt-BR'))
+  }, [filtrados])
 
   // ── DADOS DE FATURAMENTO POR MÉDICO ───────────────────────────────────
   const medicosOrdenados = useMemo(() =>
@@ -147,38 +160,59 @@ export function Comprovantes({ comprovantes=[], medicos, notas=[], extratoBancar
       {/* ── ABA COMPROVANTES ── */}
       {aba === 'comprovantes' && (
         <div className="card">
-          <div className="table-toolbar">
+          <div className="table-toolbar" style={{ flexWrap: 'wrap' }}>
             <span className="table-title">Comprovantes gerados</span>
+            <select className="filter-select" value={medicoSel} onChange={e => setMedicoSel(e.target.value)}>
+              <option value="">Todos médicos</option>
+              {medicosOrdenados.map(m => <option key={m.id} value={m.nome}>{m.nome}</option>)}
+            </select>
             <input className="search-input" placeholder="🔍 Buscar médico…" value={busca} onChange={e=>setBusca(e.target.value)}/>
+            {medicoSel && <button className="btn btn-ghost btn-xs" onClick={() => setMedicoSel('')}>Limpar seleção</button>}
           </div>
-          <div className="table-wrap"><table>
-            <thead><tr><th>#</th><th>Seq.</th><th>Médico</th><th>NF</th><th>Tomador</th><th>Competência</th><th>Valor repasse</th><th>Data pag.</th><th>Link</th><th>WhatsApp</th><th>Status</th><th></th></tr></thead>
-            <tbody>
-              {filtrados.length===0
-                ? <tr><td colSpan={12}><div className="empty-state"><div className="empty-icon">🧾</div><h4>Nenhum comprovante</h4><p>São gerados automaticamente ao cadastrar notas</p></div></td></tr>
-                : filtrados.map((c,i) => (
-                  <tr key={c.id}>
-                    <td className="mono" style={{ color:'var(--n5)' }}>{i+1}</td>
-                    <td className="mono" style={{ fontWeight:700, color:'var(--g2)' }}>#{pad(getNumSeq(c))}</td>
-                    <td style={{ fontWeight:500 }}>{c.medico_nome||'—'}</td>
-                    <td className="mono">{c.dados_extras?.nf||'—'}</td>
-                    <td>{c.tomador||'—'}</td>
-                    <td className="mono">{fmtMes(c.competencia)}</td>
-                    <td className="mono" style={{ fontWeight:700, color:'var(--g3)' }}>{brl(c.valor_repasse)}</td>
-                    <td className="mono">{c.data_pagamento ? fmtData(c.data_pagamento) : fmtData(new Date().toISOString())}</td>
-                    <td style={{ display:'flex', gap:4, paddingTop:6 }}>
-                      <button className="btn btn-ghost btn-xs" onClick={()=>copiarMensagem(c)} title="Copia a mensagem completa (pronta para colar no WhatsApp)">💬 Copiar</button>
-                      <button className="btn btn-ghost btn-xs" onClick={()=>copiarLink(c.token)} title="Copia só o link">🔗</button>
-                      <button className="btn btn-ghost btn-xs" onClick={()=>window.open(`${baseUrl}?token=${c.token}`,'_blank')}>↗</button>
-                    </td>
-                    <td><button className="btn btn-wpp btn-xs" onClick={()=>abrirWpp(c)}>💬 Enviar</button></td>
-                    <td><span className={`badge ${c.whatsapp_enviado?'badge-ok':'badge-emit'}`}>{c.whatsapp_enviado?'✓ Enviado':'Pendente'}</span></td>
-                    <td><button className="btn btn-danger btn-xs" onClick={()=>excluir(c.id)}>✕</button></td>
-                  </tr>
-                ))
-              }
-            </tbody>
-          </table></div>
+
+          {filtrados.length === 0 ? (
+            <div className="empty-state"><div className="empty-icon">🧾</div><h4>Nenhum comprovante</h4><p>São gerados automaticamente ao cadastrar notas</p></div>
+          ) : (
+            <div>
+              {comprovantesPorMedico.map((g, gi) => (
+                <div key={gi}>
+                  <div style={{
+                    position: 'sticky', top: 0, zIndex: 1, background: 'var(--g1)', color: '#fff',
+                    padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 12, fontSize: 12.5, fontWeight: 700,
+                  }}>
+                    <span style={{ flex: 1 }}>👨‍⚕️ {g.medico}</span>
+                    <span style={{ fontSize: 11, fontWeight: 500, opacity: .85 }}>{g.qtd} comprovante(s)</span>
+                    <span className="mono" style={{ fontSize: 11 }}>Total {brl(g.total)}</span>
+                  </div>
+                  <div className="table-wrap">
+                    <table>
+                      <thead><tr><th>Seq.</th><th>NF</th><th>Tomador</th><th>Competência</th><th>Valor repasse</th><th>Data pag.</th><th>Link</th><th>WhatsApp</th><th>Status</th><th></th></tr></thead>
+                      <tbody>
+                        {g.itens.map(c => (
+                          <tr key={c.id}>
+                            <td className="mono" style={{ fontWeight:700, color:'var(--g2)' }}>#{pad(getNumSeq(c))}</td>
+                            <td className="mono">{c.dados_extras?.nf||'—'}</td>
+                            <td>{c.tomador||'—'}</td>
+                            <td className="mono">{fmtMes(c.competencia)}</td>
+                            <td className="mono" style={{ fontWeight:700, color:'var(--g3)' }}>{brl(c.valor_repasse)}</td>
+                            <td className="mono">{c.data_pagamento ? fmtData(c.data_pagamento) : fmtData(new Date().toISOString())}</td>
+                            <td style={{ display:'flex', gap:4, paddingTop:6 }}>
+                              <button className="btn btn-ghost btn-xs" onClick={()=>copiarMensagem(c)} title="Copia a mensagem completa (pronta para colar no WhatsApp)">💬 Copiar</button>
+                              <button className="btn btn-ghost btn-xs" onClick={()=>copiarLink(c.token)} title="Copia só o link">🔗</button>
+                              <button className="btn btn-ghost btn-xs" onClick={()=>window.open(`${baseUrl}?token=${c.token}`,'_blank')}>↗</button>
+                            </td>
+                            <td><button className="btn btn-wpp btn-xs" onClick={()=>abrirWpp(c)}>💬 Enviar</button></td>
+                            <td><span className={`badge ${c.whatsapp_enviado?'badge-ok':'badge-emit'}`}>{c.whatsapp_enviado?'✓ Enviado':'Pendente'}</span></td>
+                            <td><button className="btn btn-danger btn-xs" onClick={()=>excluir(c.id)}>✕</button></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
