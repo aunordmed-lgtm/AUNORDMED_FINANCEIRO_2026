@@ -225,6 +225,29 @@ export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], on
   function buscarTomadorPorNomeExato(nome) {
     return tomadores.find(t => t.nome === nome)
   }
+
+  // Cadastro rápido de tomador, direto do formulário da nota
+  const [cadastroTomadorAberto, setCadastroTomadorAberto] = useState(false)
+  const [novoTomadorCnpj, setNovoTomadorCnpj] = useState('')
+  const [salvandoTomador, setSalvandoTomador] = useState(false)
+
+  async function cadastrarTomadorRapido() {
+    if (!form.tomador?.trim()) { toast('Digite o nome do tomador primeiro.', 'error'); return }
+    setSalvandoTomador(true)
+    try {
+      const { error } = await supabase.from('tomadores').insert({ nome: form.tomador.trim(), cnpj: novoTomadorCnpj.trim() || null })
+      if (error) throw error
+      setForm(f => ({ ...f, tomador_cnpj: novoTomadorCnpj.trim() || '' }))
+      setCadastroTomadorAberto(false)
+      setNovoTomadorCnpj('')
+      toast('Tomador cadastrado!')
+      onRefresh?.()
+    } catch (e) {
+      toast('Erro ao cadastrar: ' + e.message, 'error')
+    }
+    setSalvandoTomador(false)
+  }
+
   const tomadoresLista = useMemo(() => [...new Set(notas.map(n => n.tomador).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR')), [notas])
 
   // Rótulo do tomador no filtro, mostrando o CNPJ do cadastro quando existir —
@@ -1886,6 +1909,7 @@ export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], on
                     const nome = e.target.value
                     const encontrado = buscarTomadorPorNomeExato(nome)
                     setForm(f => ({ ...f, tomador: nome, tomador_cnpj: encontrado?.cnpj || '' }))
+                    setCadastroTomadorAberto(false)
                   }}/>
                 <datalist id="tomador-datalist">
                   {tomadoresOrdenados.map(t => <option key={t.id} value={t.nome}>{t.cnpj ? `${t.nome} — CNPJ ${t.cnpj}` : t.nome}</option>)}
@@ -1893,8 +1917,27 @@ export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], on
                 {form.tomador_cnpj && (
                   <div style={{ fontSize: 11, color: 'var(--n5)', marginTop: 3 }}>CNPJ: {form.tomador_cnpj}</div>
                 )}
-                {form.tomador && !form.tomador_cnpj && (
-                  <div style={{ fontSize: 11, color: '#D97706', marginTop: 3 }}>⚠️ Esse tomador não está no cadastro (sem CNPJ vinculado) — confira se não é uma filial de nome parecido.</div>
+                {form.tomador && !form.tomador_cnpj && !cadastroTomadorAberto && (
+                  <div style={{ fontSize: 11, color: '#D97706', marginTop: 3, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span>⚠️ Esse tomador não está no cadastro — confira se não é uma filial de nome parecido.</span>
+                    <button type="button" onClick={() => setCadastroTomadorAberto(true)}
+                      style={{ background: 'none', border: 'none', color: 'var(--g3)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline', padding: 0, fontSize: 11 }}>
+                      + Cadastrar esse tomador agora
+                    </button>
+                  </div>
+                )}
+                {cadastroTomadorAberto && (
+                  <div style={{ marginTop: 6, padding: 10, background: 'var(--n9)', border: '1px solid var(--border)', borderRadius: 8, display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                    <div style={{ flex: 1, minWidth: 160 }}>
+                      <label style={{ fontSize: 10, fontWeight: 700, color: 'var(--n5)', textTransform: 'uppercase', display: 'block', marginBottom: 3 }}>CNPJ (opcional)</label>
+                      <input type="text" value={novoTomadorCnpj} onChange={e => setNovoTomadorCnpj(e.target.value)}
+                        placeholder="00.000.000/0001-00" style={{ height: 30, fontSize: 12, width: '100%' }}/>
+                    </div>
+                    <button type="button" className="btn btn-primary btn-sm" onClick={cadastrarTomadorRapido} disabled={salvandoTomador}>
+                      {salvandoTomador ? 'Salvando…' : `✓ Cadastrar "${form.tomador}"`}
+                    </button>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => { setCadastroTomadorAberto(false); setNovoTomadorCnpj('') }}>Cancelar</button>
+                  </div>
                 )}
               </div>
               {[['comp','Competência (emissão)','month',''],['mes_recebimento','Mês de recebimento','month',''],['data_vencimento','Prazo de pagamento (vencimento)','date',''],['data_pagamento','Data de pagamento (exata)','date',''],['emissao','Data emissão','date',''],['obs','Observações','text','']].map(([k,l,t,p]) => (
