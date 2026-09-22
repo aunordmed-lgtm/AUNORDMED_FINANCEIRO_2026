@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
-import { supabase } from '../lib/supabase'
+import { supabase, getUser } from '../lib/supabase'
 import { Modal } from '../components/Modal'
 import { useToast } from '../components/Toast'
 import { brl, pct, fmtMes, uid } from '../lib/helpers'
@@ -163,7 +163,55 @@ export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], on
   const [editFormPlan, setEditFormPlan] = useState({ comp: '', nf: '', tomador: '', medico: '', bruto: '', retencao: '', status: '', dataPagamento: '' })
   const [salvandoPlan, setSalvandoPlan] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
-  const [abaModal, setAbaModal] = useState('dados') // dados | importar
+  const [abaModal, setAbaModal] = useState('dados') // dados | importar | particularidades
+  const [particularidadesDaNota, setParticularidadesDaNota] = useState([])
+  const [novaParticCategoria, setNovaParticCategoria] = useState('acordo_verbal')
+  const [novaParticDescricao, setNovaParticDescricao] = useState('')
+  const [salvandoPartic, setSalvandoPartic] = useState(false)
+
+  const CATEGORIAS_PARTICULARIDADE = {
+    acordo_verbal: '🤝 Acordo verbal',
+    erro_terceiros: '⚠️ Erro de terceiros',
+    excecao_fiscal: '🧾 Exceção fiscal',
+    atraso_justificado: '⏱️ Atraso justificado',
+    ajuste_manual: '✏️ Ajuste manual',
+    outro: '📌 Outro',
+  }
+
+  async function carregarParticularidades(notaId) {
+    if (!notaId) { setParticularidadesDaNota([]); return }
+    try {
+      const { data } = await supabase.from('particularidades').select('*').eq('nota_id', notaId).order('criado_em', { ascending: false })
+      setParticularidadesDaNota(data || [])
+    } catch (e) { setParticularidadesDaNota([]) }
+  }
+
+  async function adicionarParticularidade() {
+    if (!novaParticDescricao.trim()) { toast('Descreva a particularidade antes de salvar.', 'error'); return }
+    if (!editando) return
+    setSalvandoPartic(true)
+    try {
+      const { error } = await supabase.from('particularidades').insert({
+        nota_id: editando.id, nf: editando.nf, tomador: editando.tomador,
+        categoria: novaParticCategoria, descricao: novaParticDescricao.trim(),
+      })
+      if (error) throw error
+      setNovaParticDescricao('')
+      await carregarParticularidades(editando.id)
+      toast('Particularidade registrada!')
+    } catch (e) {
+      toast('Erro ao registrar: ' + e.message, 'error')
+    }
+    setSalvandoPartic(false)
+  }
+
+  async function excluirParticularidade(id) {
+    if (!window.confirm('Remover essa particularidade?')) return
+    await supabase.from('particularidades').delete().eq('id', id)
+    await carregarParticularidades(editando?.id)
+    toast('Removida.')
+  }
+
   const [editando, setEditando] = useState(null)
   const [loading, setLoading] = useState(false)
   const [busca, setBusca] = useState('')
@@ -524,6 +572,7 @@ export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], on
     setAbaModal('dados')
     setImportPreview([])
     setImportErro('')
+    setParticularidadesDaNota([])
     setModalOpen(true)
   }
 
@@ -534,6 +583,7 @@ export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], on
     setAbaModal('dados')
     setImportPreview([])
     setImportErro('')
+    carregarParticularidades(nota.id)
     setModalOpen(true)
   }
 
@@ -667,11 +717,17 @@ export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], on
       if (editando) {
         const { error } = await supabase.from('notas_fiscais').update(payload).eq('id', editando.id)
         if (error) throw error
+        registrarAuditoria('nota_editada', editando.id, {
+          nf: payload.nf,
+          bruto_antes: editando.bruto, bruto_depois: payload.bruto,
+          status_antes: editando.status, status_depois: payload.status,
+        })
         await sincronizarExtratoDaNota({ ...editando, ...payload, id: editando.id, nf: payload.nf || editando.nf })
         toast('Nota atualizada!')
       } else {
         const { data: nova, error } = await supabase.from('notas_fiscais').insert(payload).select().single()
         if (error) throw error
+        registrarAuditoria('nota_criada', nova?.id, { nf: payload.nf, tomador: payload.tomador, bruto: payload.bruto })
         for (const ms of medSel) {
           const med = medicos.find(m => m.nome === ms.nome)
           const repMed = parseFloat(ms.valor || 0) * (1 - parseFloat(ms.ret || 13) / 100)
@@ -972,8 +1028,22 @@ export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], on
     onRefresh()
   }
 
+  // Trilha de auditoria automática — grava um evento sempre que algo relevante
+  // muda numa nota, sem precisar de ação manual. Nunca sobrescreve nada, só soma.
+  async function registrarAuditoria(acao, registroId, dados) {
+    try {
+      let usuarioEmail = null
+      try { const { data } = await getUser(); usuarioEmail = data?.user?.email || null } catch (e) {}
+      await supabase.from('auditoria').insert({
+        usuario_email: usuarioEmail, acao, tabela: 'notas_fiscais', registro_id: registroId, dados,
+      })
+    } catch (e) { /* auditoria não deve travar a ação principal se falhar */ }
+  }
+
   const alterarStatus = async (id, status) => {
+    const notaAntes = notas.find(n => n.id === id)
     await supabase.from('notas_fiscais').update({ status }).eq('id', id)
+    registrarAuditoria('status_alterado', id, { nf: notaAntes?.nf, status_anterior: notaAntes?.status, status_novo: status })
     if (status === 'Paga ao médico') {
       const nota = notas.find(n => n.id === id)
       if (nota) await sincronizarExtratoDaNota({ ...nota, status })
@@ -1887,7 +1957,7 @@ export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], on
 
         {/* Sub-abas do modal */}
         <div style={{ display:'flex', gap:2, marginBottom:16, borderBottom:'1px solid var(--border)' }}>
-          {[['dados','📋 Dados da nota'],['importar','📊 Importar médicos (Excel)']].map(([id,label]) => (
+          {[['dados','📋 Dados da nota'],['importar','📊 Importar médicos (Excel)'], ...(editando ? [['particularidades',`📌 Particularidades${particularidadesDaNota.length ? ` (${particularidadesDaNota.length})` : ''}`]] : [])].map(([id,label]) => (
             <button key={id} onClick={() => setAbaModal(id)} style={{ padding:'7px 16px', border:'none', borderBottom:abaModal===id?'2px solid var(--g5)':'2px solid transparent', background:'none', cursor:'pointer', fontSize:12, fontWeight:abaModal===id?600:400, color:abaModal===id?'var(--g3)':'var(--n5)', fontFamily:'var(--sans)' }}>
               {label}
             </button>
@@ -2069,6 +2139,45 @@ export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], on
         )}
 
         {/* ABA IMPORTAR EXCEL */}
+        {/* ABA PARTICULARIDADES */}
+        {abaModal === 'particularidades' && editando && (
+          <div>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 14, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <div style={{ minWidth: 170 }}>
+                <label style={{ fontSize: 10, fontWeight: 700, color: 'var(--n5)', textTransform: 'uppercase', display: 'block', marginBottom: 3 }}>Categoria</label>
+                <select value={novaParticCategoria} onChange={e => setNovaParticCategoria(e.target.value)} style={{ height: 34, width: '100%' }}>
+                  {Object.entries(CATEGORIAS_PARTICULARIDADE).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                </select>
+              </div>
+              <div style={{ flex: 1, minWidth: 220 }}>
+                <label style={{ fontSize: 10, fontWeight: 700, color: 'var(--n5)', textTransform: 'uppercase', display: 'block', marginBottom: 3 }}>Descrição</label>
+                <input type="text" value={novaParticDescricao} onChange={e => setNovaParticDescricao(e.target.value)}
+                  placeholder="Ex: tomador pediu prazo extra por acordo verbal com o financeiro" style={{ height: 34, width: '100%' }}/>
+              </div>
+              <button className="btn btn-primary btn-sm" onClick={adicionarParticularidade} disabled={salvandoPartic}>
+                {salvandoPartic ? 'Salvando…' : '+ Registrar'}
+              </button>
+            </div>
+
+            {particularidadesDaNota.length === 0 ? (
+              <div className="empty-state" style={{ padding: '1.5rem' }}><div className="empty-icon">📌</div><p>Nenhuma particularidade registrada pra essa nota ainda.</p></div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {particularidadesDaNota.map(p => (
+                  <div key={p.id} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--n9)' }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--g3)', marginBottom: 3 }}>{CATEGORIAS_PARTICULARIDADE[p.categoria] || p.categoria}</div>
+                      <div style={{ fontSize: 12.5, color: 'var(--n2)' }}>{p.descricao}</div>
+                      <div style={{ fontSize: 10, color: 'var(--n5)', marginTop: 4 }}>{new Date(p.criado_em).toLocaleString('pt-BR')}</div>
+                    </div>
+                    <button className="btn btn-ghost btn-xs" onClick={() => excluirParticularidade(p.id)}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {abaModal === 'importar' && (
           <div>
             <div style={{ background:'var(--g10)', border:'1px solid var(--g8)', borderRadius:'var(--radius-lg)', padding:'12px 16px', marginBottom:14 }}>
