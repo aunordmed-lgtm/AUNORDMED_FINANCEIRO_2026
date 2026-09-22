@@ -25,6 +25,7 @@ import { Gargalos } from './Gargalos'
 import { Documentos } from './Documentos'
 import { Governanca } from './Governanca'
 import { Comunicacao } from './Comunicacao'
+import { RelatorioParticularidades } from './RelatorioParticularidades'
 
 async function safeQueryCustom(fn) {
   try {
@@ -97,6 +98,7 @@ export function AppLayout() {
           <Route path="/documentos" element={<Documentos {...props} />} />
           <Route path="/governanca" element={<Governanca {...props} />} />
           <Route path="/comunicacao" element={<Comunicacao {...props} />} />
+          <Route path="/particularidades" element={<RelatorioParticularidades {...props} />} />
           <Route path="/medicos" element={<Medicos {...props} />} />
           <Route path="/tomadores" element={<Tomadores {...props} />} />
           <Route path="/adiantamentos" element={<Adiantamentos {...props} />} />
