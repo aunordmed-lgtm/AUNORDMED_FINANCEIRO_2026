@@ -30,6 +30,7 @@ const navItems = [
   { path: '/comprovantes', icon: '🧾', label: 'Comprovantes', badge: 'comp', badgeColor: 'ok' },
   { path: '/relatorios', icon: '📈', label: 'Por médico' },
   { path: '/regime-caixa', icon: '💳', label: 'Regime de caixa' },
+  { path: '/particularidades', icon: '📌', label: 'Particularidades' },
   { section: 'Sistema' },
   { path: '/documentos', icon: '📎', label: 'Documentos' },
   { path: '/configuracoes', icon: '⚙️', label: 'Configurações' },
