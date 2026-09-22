@@ -20,7 +20,10 @@ export function Cashback({ cashbacks=[], medicos, notas=[], onRefresh }) {
   // ainda não faturou nada.
   const medicosComNota = useMemo(() => {
     const s = new Set()
-    notas.forEach(n => (n.medicos_nota || []).forEach(mn => mn.nome && s.add(mn.nome)))
+    notas.forEach(n => {
+      const meds = n.medicos_nota?.length ? n.medicos_nota : (n.nomes_medicos ? n.nomes_medicos.split(',').map(nm => ({ nome: nm.trim() })) : [])
+      meds.forEach(mn => mn.nome && s.add(mn.nome))
+    })
     return s
   }, [notas])
 
@@ -29,14 +32,28 @@ export function Cashback({ cashbacks=[], medicos, notas=[], onRefresh }) {
   , [medicosOrdenados, medicosComNota])
 
   // Valor bruto da primeira nota do médico indicado — só como referência/conferência.
+  function medsDaNota(n) {
+    return n.medicos_nota?.length ? n.medicos_nota : (n.nomes_medicos ? n.nomes_medicos.split(',').map(nm => ({ nome: nm.trim() })) : [])
+  }
+
   function primeiraNotaBruto(nomeMedico) {
     if (!nomeMedico) return null
-    const doMedico = notas.filter(n => (n.medicos_nota || []).some(mn => mn.nome === nomeMedico))
+    const doMedico = notas.filter(n => medsDaNota(n).some(mn => mn.nome === nomeMedico))
     if (!doMedico.length) return null
-    const ordenadas = [...doMedico].sort((a, b) => (a.criado_em || '').localeCompare(b.criado_em || ''))
+    // Ordena pela competência real da nota (e data de emissão como desempate) —
+    // NÃO pela data em que foi cadastrada no sistema, que pode ser bem diferente
+    // quando notas são importadas em lote, fora de ordem cronológica.
+    const ordenadas = [...doMedico].sort((a, b) =>
+      (a.comp || '').localeCompare(b.comp || '') || (a.emissao || '').localeCompare(b.emissao || '')
+    )
     const primeira = ordenadas[0]
-    const mn = primeira.medicos_nota.find(m => m.nome === nomeMedico)
-    return { bruto: mn?.valor_bruto_medico || 0, nf: primeira.nf, comp: primeira.comp }
+    const mn = medsDaNota(primeira).find(m => m.nome === nomeMedico)
+    if (mn?.valor_bruto_medico > 0) {
+      return { bruto: mn.valor_bruto_medico, nf: primeira.nf, comp: primeira.comp, aproximado: false }
+    }
+    // Nota antiga sem valor individual por médico salvo — mostra o bruto total
+    // da nota como aproximação, deixando claro que não é o valor exato dele.
+    return { bruto: primeira.bruto || 0, nf: primeira.nf, comp: primeira.comp, aproximado: true }
   }
 
   const totalPend = cashbacks.filter(c=>c.status==='pendente').reduce((s,c)=>s+c.valor,0)
@@ -126,7 +143,7 @@ export function Cashback({ cashbacks=[], medicos, notas=[], onRefresh }) {
             </div>
             {refBruto && (
               <div style={{ fontSize: 11, color: 'var(--g3)', marginTop: 4, fontWeight: 600 }}>
-                📄 Primeira nota: NF {refBruto.nf || '—'} · {brl(refBruto.bruto)} bruto
+                📄 Primeira nota: NF {refBruto.nf || '—'} · {brl(refBruto.bruto)} bruto{refBruto.aproximado ? ' (total da nota, não individual)' : ''}
               </div>
             )}
           </div>
