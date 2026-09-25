@@ -180,11 +180,17 @@ export function ImportacaoNF({ medicos, onRefresh }) {
         // cadastro já existente — e cadastra automaticamente se ainda não existir.
         let tomadorCnpjFinal = n.tomadorCnpj || null
         if (n.tomador && n.tomador !== 'Tomador não identificado' && n.tomador !== 'Não informado') {
-          const { data: tomExist } = await supabase.from('tomadores').select('id, cnpj').eq('nome', n.tomador).single().catch(() => ({ data: null }))
+          let tomExist = null
+          try {
+            const r = await supabase.from('tomadores').select('id, cnpj').eq('nome', n.tomador).single()
+            tomExist = r.data
+          } catch (eBusca) { tomExist = null }
           if (tomExist) {
             if (!tomadorCnpjFinal && tomExist.cnpj) tomadorCnpjFinal = tomExist.cnpj
           } else {
-            await supabase.from('tomadores').insert({ nome: n.tomador, cnpj: tomadorCnpjFinal || null, obs: 'Cadastrado automaticamente via importação de NF' }).catch(() => {})
+            try {
+              await supabase.from('tomadores').insert({ nome: n.tomador, cnpj: tomadorCnpjFinal || null, obs: 'Cadastrado automaticamente via importação de NF' })
+            } catch (eCad) { /* se falhar o auto-cadastro, segue sem travar a importação da nota */ }
           }
         }
         const recebido = n.bruto * 0.9385
