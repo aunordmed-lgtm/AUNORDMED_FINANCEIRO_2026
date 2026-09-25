@@ -160,6 +160,7 @@ export function ImportacaoNF({ medicos, onRefresh }) {
     const retencao = parseFloat(retencaoCustom) || med?.retencao || 13
     setLoading(true)
     let sucesso = 0, falhas = 0, duplicadas = 0
+    const falhasDetalhe = []
 
     // Buscar NFs já existentes para evitar duplicatas
     const nfsExistentes = await supabase.from('notas_fiscais').select('nf,comp').then(r => r.data || [])
@@ -191,15 +192,20 @@ export function ImportacaoNF({ medicos, onRefresh }) {
         const totalRepasse = medicos_nota.reduce((a, m) => a + m.repasse, 0)
         const margem = recebido - totalRepasse
         const payload = { nf: n.nf, tomador: n.tomador, tomador_cnpj: tomadorCnpjFinal, comp: n.comp, emissao: n.emissao, status: n.status, bruto: n.bruto, recebido, total_repasse: totalRepasse, margem, pct_margem: recebido > 0 ? margem/recebido : 0, medicos_nota: medicos_nota.length ? medicos_nota : null, nomes_medicos: medicoSelecionado || null, obs: n.discriminacao ? `Discriminação: ${n.discriminacao}` : null }
-        const { data: nova } = await supabase.from('notas_fiscais').insert(payload).select().single()
+        const { data: nova, error: erroInsert } = await supabase.from('notas_fiscais').insert(payload).select().single()
+        if (erroInsert) throw erroInsert
         if (medicoSelecionado && nova?.id) {
-          await supabase.from('comprovantes').insert({ token: uid(), nf_id: nova.id, medico_nome: medicoSelecionado, medico_crm: med?.crm || null, tomador: n.tomador, valor_repasse: n.bruto * (1 - retencao/100), competencia: n.comp, dados_extras: { nf: n.nf, pix: med?.chave_pix } })
+          const { error: erroComp } = await supabase.from('comprovantes').insert({ token: uid(), nf_id: nova.id, medico_nome: medicoSelecionado, medico_crm: med?.crm || null, tomador: n.tomador, valor_repasse: n.bruto * (1 - retencao/100), competencia: n.comp, dados_extras: { nf: n.nf, pix: med?.chave_pix } })
+          if (erroComp) throw erroComp
         }
         sucesso++
-      } catch(e) { falhas++ }
+      } catch(e) {
+        falhas++
+        falhasDetalhe.push({ nf: n.nf, motivo: e.message || 'Erro desconhecido' })
+      }
     }
     setLoading(false)
-    setResultado({ sucesso, falhas, duplicadas, total: notasSel.length })
+    setResultado({ sucesso, falhas, duplicadas, total: notasSel.length, falhasDetalhe })
     setEtapa('resultado')
     onRefresh()
   }
@@ -361,6 +367,16 @@ export function ImportacaoNF({ medicos, onRefresh }) {
               {resultado.falhas > 0 && <span style={{ color: 'var(--red)', fontWeight: 700 }}> · {resultado.falhas} falha(s)</span>}
               {resultado.duplicadas > 0 && <span style={{ color: 'var(--orange)', fontWeight: 700 }}> · {resultado.duplicadas} já existiam (ignoradas)</span>}
             </div>
+            {resultado.falhasDetalhe?.length > 0 && (
+              <div style={{ marginTop: 16, textAlign: 'left', maxWidth: 480, background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#B91C1C', marginBottom: 6 }}>Motivo das falhas:</div>
+                {resultado.falhasDetalhe.map((f, i) => (
+                  <div key={i} style={{ fontSize: 11.5, color: '#B91C1C', marginBottom: 4 }}>
+                    <strong>NF {f.nf || '—'}:</strong> {f.motivo}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
             <button className="btn btn-outline" onClick={reiniciar}>⬆ Importar mais</button>
