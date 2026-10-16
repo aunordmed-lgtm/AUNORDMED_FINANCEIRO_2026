@@ -1,31 +1,39 @@
-// Etapas do ciclo Order-to-Cash de uma nota fiscal.
-// "etapa" é um campo à parte do "status" (Emitida / Recebida / Paga ao médico):
-// o status continua alimentando todos os relatórios; a etapa diz em que ponto do
-// ciclo a nota está agora, quem mexeu por último e quando.
-export const ETAPAS = {
-  emitida: '📄 Emitida',
-  aguardando_aprovacao: '🕒 Aguardando medição/aprovação',
-  em_cobranca: '📣 Em cobrança',
-  em_divergencia: '⚠️ Em divergência (glosa/retenção)',
-  recebida: '💰 Recebida',
-  repassada: '💸 Repassada ao médico',
-  encerrada: '✅ Competência encerrada',
+// Regras de "exceção de recebimento", compartilhadas pela tela de Exceções e pelo
+// contador do menu, para os dois sempre concordarem.
+
+export const MOTIVOS_DIVERGENCIA = {
+  iss_retido: 'ISS retido pelo tomador',
+  glosa: 'Glosa',
+  retencao_federal: 'Retenção federal',
+  pagamento_parcial: 'Pagamento parcial',
+  desconto_comercial: 'Desconto comercial',
+  erro_valor: 'Erro de valor',
+  outro: 'Outro (descrever)',
 }
 
-export const ORDEM_ETAPAS = Object.keys(ETAPAS)
-
-// Se a nota ainda não tem etapa registrada (notas antigas), deduz pelo status.
-export function etapaEfetiva(nota) {
-  if (!nota) return 'emitida'
-  if (nota.etapa && ETAPAS[nota.etapa]) return nota.etapa
-  if (nota.status === 'Paga ao médico') return 'repassada'
-  if (nota.status === 'Recebida') return 'recebida'
-  return 'emitida'
+// Valor que deveria ter entrado: o calculado pelas regras do tomador, quando existe;
+// senão, o "recebido" padrão da nota (bruto menos 6,15%), que é o que o sistema já usava.
+export function esperadoEfetivo(n) {
+  if (n.valor_esperado_recebimento != null) return Number(n.valor_esperado_recebimento)
+  return Number(n.recebido || 0)
 }
 
-// Etapa que corresponde a cada status, usada quando o status é trocado na lista.
-export function etapaDoStatus(status) {
-  if (status === 'Paga ao médico') return 'repassada'
-  if (status === 'Recebida') return 'recebida'
-  return 'emitida'
+// Diferença = recebido de fato - esperado. Negativa = recebeu a menos.
+// Só existe quando o "valor recebido real" foi informado na nota.
+export function diferencaRecebimento(n) {
+  if (n.valor_recebido_real == null || n.valor_recebido_real === '') return null
+  const esp = esperadoEfetivo(n)
+  if (!esp) return null
+  return Number(n.valor_recebido_real) - esp
+}
+
+export function emExcecao(n) {
+  const d = diferencaRecebimento(n)
+  // Compara em centavos inteiros: evita que 1 centavo vire exceção por arredondamento.
+  return d != null && Math.round(Math.abs(d) * 100) > 1
+}
+
+// Exceção ainda sem motivo registrado: é o que entra na fila de pendências.
+export function excecaoPendente(n) {
+  return emExcecao(n) && !n.motivo_divergencia
 }
