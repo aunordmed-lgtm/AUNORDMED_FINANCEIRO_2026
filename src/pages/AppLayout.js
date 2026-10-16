@@ -26,6 +26,9 @@ import { Documentos } from './Documentos'
 import { Governanca } from './Governanca'
 import { Comunicacao } from './Comunicacao'
 import { RelatorioParticularidades } from './RelatorioParticularidades'
+import { Excecoes } from './Excecoes'
+import { SituacaoNotas } from './SituacaoNotas'
+import { excecaoPendente } from '../lib/excecoes'
 
 async function safeQueryCustom(fn) {
   try {
@@ -73,6 +76,7 @@ export function AppLayout() {
     contas: data.contas.filter(c => c.status === 'pendente').length,
     solic: data.solicitacoes.filter(s => s.status === 'Pendente').length,
     gargalo: data.notas.filter(n => n.status === 'Emitida').length + data.notas.filter(n => n.valor_recebido_real != null && n.valor_recebido_real < (n.recebido || 0) - 0.01).length,
+    excecoes: data.notas.filter(excecaoPendente).length,
     vencidas: data.notas.filter(n => n.status !== 'Paga ao médico' && n.data_vencimento && n.data_vencimento.split('T')[0] < hojeISO).length,
   }
 
@@ -99,6 +103,8 @@ export function AppLayout() {
           <Route path="/governanca" element={<Governanca {...props} />} />
           <Route path="/comunicacao" element={<Comunicacao {...props} />} />
           <Route path="/particularidades" element={<RelatorioParticularidades {...props} />} />
+          <Route path="/excecoes" element={<Excecoes {...props} />} />
+          <Route path="/situacao" element={<SituacaoNotas {...props} />} />
           <Route path="/medicos" element={<Medicos {...props} />} />
           <Route path="/tomadores" element={<Tomadores {...props} />} />
           <Route path="/adiantamentos" element={<Adiantamentos {...props} />} />
