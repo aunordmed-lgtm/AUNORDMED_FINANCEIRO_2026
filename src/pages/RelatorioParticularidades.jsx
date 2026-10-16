@@ -1,15 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../lib/supabase'
 import { useToast } from '../components/Toast'
-
-const CATEGORIAS = {
-  acordo_verbal: '🤝 Acordo verbal',
-  erro_terceiros: '⚠️ Erro de terceiros',
-  excecao_fiscal: '🧾 Exceção fiscal',
-  atraso_justificado: '⏱️ Atraso justificado',
-  ajuste_manual: '✏️ Ajuste manual',
-  outro: '📌 Outro',
-}
+import { CATEGORIAS_PARTICULARIDADE as CATEGORIAS } from '../lib/particularidades'
 
 const fmtDataHora = iso => new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 
