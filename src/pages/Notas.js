@@ -4,6 +4,8 @@ import { Modal } from '../components/Modal'
 import { useToast } from '../components/Toast'
 import { brl, pct, fmtMes, uid } from '../lib/helpers'
 import * as XLSX from 'xlsx'
+import { ETAPAS, ORDEM_ETAPAS, etapaEfetiva, etapaDoStatus } from '../lib/etapas'
+import { CATEGORIAS_PARTICULARIDADE } from '../lib/particularidades'
 
 function normalizarTxt(s) {
   return (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
@@ -169,15 +171,6 @@ export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], on
   const [novaParticDescricao, setNovaParticDescricao] = useState('')
   const [salvandoPartic, setSalvandoPartic] = useState(false)
 
-  const CATEGORIAS_PARTICULARIDADE = {
-    acordo_verbal: '🤝 Acordo verbal',
-    erro_terceiros: '⚠️ Erro de terceiros',
-    excecao_fiscal: '🧾 Exceção fiscal',
-    atraso_justificado: '⏱️ Atraso justificado',
-    ajuste_manual: '✏️ Ajuste manual',
-    outro: '📌 Outro',
-  }
-
   async function carregarParticularidades(notaId) {
     if (!notaId) { setParticularidadesDaNota([]); return }
     try {
@@ -220,10 +213,11 @@ export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], on
   const [fltCompAte, setFltCompAte] = useState('')
   const [fltTomador, setFltTomador] = useState('')
   const [fltMedico, setFltMedico] = useState('')
+  const [fltEtapa, setFltEtapa] = useState('')
   const [sortKey, setSortKey] = useState('criado_em')
   const [sortDir, setSortDir] = useState('desc')
   const [medSel, setMedSel] = useState([])
-  const [form, setForm] = useState({ nf: '', tomador: '', tomador_cnpj: '', comp: '', mes_recebimento: '', valor_recebido_real: '', data_pagamento: '', data_vencimento: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
+  const [form, setForm] = useState({ nf: '', tomador: '', tomador_cnpj: '', comp: '', mes_recebimento: '', valor_recebido_real: '', data_pagamento: '', data_recebimento: '', data_vencimento: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
   // Importação Excel médicos
   const [importPreview, setImportPreview] = useState([])
   const [importErro, setImportErro] = useState('')
@@ -273,6 +267,51 @@ export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], on
   function buscarTomadorPorNomeExato(nome) {
     return tomadores.find(t => t.nome === nome)
   }
+
+  // Regras do cadastro mestre aplicadas à nota em edição. Se houver filiais com o
+  // mesmo nome, prefere a que tem o mesmo CNPJ já vinculado à nota.
+  const tomadorRegra = useMemo(() => {
+    if (!form.tomador) return null
+    return tomadores.find(t => t.nome === form.tomador && (!form.tomador_cnpj || t.cnpj === form.tomador_cnpj))
+      || tomadores.find(t => t.nome === form.tomador) || null
+  }, [tomadores, form.tomador, form.tomador_cnpj])
+
+  // Vencimento = emissão + prazo do tomador. Só calcula quando o prazo conta da emissão;
+  // para aceite/recebimento a data-base ainda não existe, então fica manual.
+  const vencSugerido = useMemo(() => {
+    const t = tomadorRegra
+    if (!t || t.prazo_dias == null || (t.base_prazo || 'emissao') !== 'emissao' || !form.emissao) return ''
+    const [y, m, d] = form.emissao.split('-').map(Number)
+    const dt = new Date(y, m - 1, d + Number(t.prazo_dias))
+    return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+  }, [tomadorRegra, form.emissao])
+
+  // Marca qual vencimento foi preenchido automaticamente, pra nunca sobrescrever
+  // uma data que a pessoa digitou.
+  const vencAutoRef = useRef('')
+  useEffect(() => {
+    setForm(f => {
+      // Sem sugestão (tomador sem prazo): só limpa se a data atual era a automática.
+      if (!vencSugerido) {
+        if (f.data_vencimento && f.data_vencimento === vencAutoRef.current) { vencAutoRef.current = ''; return { ...f, data_vencimento: '' } }
+        return f
+      }
+      if (f.data_vencimento && f.data_vencimento !== vencAutoRef.current) return f
+      vencAutoRef.current = vencSugerido
+      return f.data_vencimento === vencSugerido ? f : { ...f, data_vencimento: vencSugerido }
+    })
+  }, [vencSugerido])
+
+  // Valor que deveria entrar na conta = bruto menos o que o tomador retém na fonte.
+  const valorEsperado = useMemo(() => {
+    const t = tomadorRegra
+    const b = parseFloat(form.bruto) || 0
+    if (!t || !b) return null
+    const iss = t.retem_iss === 'sim' ? Number(t.aliq_iss) || 0 : 0
+    const outras = Number(t.ret_outras_pct) || 0
+    if (!iss && !outras) return null
+    return { valor: b * (1 - (iss + outras) / 100), iss, outras }
+  }, [tomadorRegra, form.bruto])
 
   // Cadastro rápido de tomador, direto do formulário da nota
   const [cadastroTomadorAberto, setCadastroTomadorAberto] = useState(false)
@@ -501,6 +540,7 @@ export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], on
       (!fltCompDe || (n.comp && n.comp >= fltCompDe)) &&
       (!fltCompAte || (n.comp && n.comp <= fltCompAte)) &&
       (!fltTomador || n.tomador === fltTomador) &&
+      (!fltEtapa || etapaEfetiva(n) === fltEtapa) &&
       (!fltMedico || (n.medicos_nota?.length ? n.medicos_nota : (n.nomes_medicos ? n.nomes_medicos.split(',').map(nm => ({ nome: nm.trim() })) : [])).some(mn => mn.nome === fltMedico))
     )
     f = [...f].sort((a, b) => {
@@ -519,7 +559,7 @@ export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], on
       return sortDir === 'asc' ? va - vb : vb - va
     })
     return f
-  }, [notas, busca, fltStatus, fltCompDe, fltCompAte, fltTomador, fltMedico, sortKey, sortDir, pagoRealPorNf])
+  }, [notas, busca, fltStatus, fltCompDe, fltCompAte, fltTomador, fltMedico, fltEtapa, sortKey, sortDir, pagoRealPorNf])
 
   // Resumo da lista atual (respeita os filtros aplicados acima)
   const kpisLista = useMemo(() => {
@@ -567,23 +607,25 @@ export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], on
 
   const abrirNova = () => {
     setEditando(null)
-    setForm({ nf: '', tomador: '', tomador_cnpj: '', comp: '', mes_recebimento: '', valor_recebido_real: '', data_pagamento: '', data_vencimento: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
+    setForm({ nf: '', tomador: '', tomador_cnpj: '', comp: '', mes_recebimento: '', valor_recebido_real: '', data_pagamento: '', data_recebimento: '', data_vencimento: '', emissao: '', status: 'Emitida', obs: '', bruto: '' })
     setMedSel([])
     setAbaModal('dados')
     setImportPreview([])
     setImportErro('')
     setParticularidadesDaNota([])
+    vencAutoRef.current = ''
     setModalOpen(true)
   }
 
   const abrirEditar = (nota) => {
     setEditando(nota)
-    setForm({ nf: nota.nf || '', tomador: nota.tomador || '', tomador_cnpj: nota.tomador_cnpj || '', comp: nota.comp || '', mes_recebimento: nota.mes_recebimento || '', valor_recebido_real: nota.valor_recebido_real ?? '', data_pagamento: nota.data_pagamento?.split('T')[0] || '', data_vencimento: nota.data_vencimento?.split('T')[0] || '', emissao: nota.emissao?.split('T')[0] || '', status: nota.status || 'Emitida', obs: nota.obs || '', bruto: nota.bruto || '' })
+    setForm({ nf: nota.nf || '', tomador: nota.tomador || '', tomador_cnpj: nota.tomador_cnpj || '', comp: nota.comp || '', mes_recebimento: nota.mes_recebimento || '', valor_recebido_real: nota.valor_recebido_real ?? '', data_pagamento: nota.data_pagamento?.split('T')[0] || '', data_recebimento: nota.data_recebimento?.split('T')[0] || '', data_vencimento: nota.data_vencimento?.split('T')[0] || '', emissao: nota.emissao?.split('T')[0] || '', status: nota.status || 'Emitida', obs: nota.obs || '', bruto: nota.bruto || '' })
     setMedSel(nota.medicos_nota?.map(mn => ({ nome: mn.nome, crm: mn.crm || '', ret: mn.retencao_individual || 13, valor: mn.valor_bruto_medico || '', modoValor: mn.modo_valor || 'bruto' })) || [])
     setAbaModal('dados')
     setImportPreview([])
     setImportErro('')
     carregarParticularidades(nota.id)
+    vencAutoRef.current = ''
     setModalOpen(true)
   }
 
@@ -710,8 +752,10 @@ export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], on
       valor_recebido_real: form.valor_recebido_real !== '' ? parseFloat(form.valor_recebido_real) : null,
       data_pagamento: form.data_pagamento || null,
       data_vencimento: form.data_vencimento || null,
+      data_recebimento: form.data_recebimento || null,
       medicos_nota: medicos_nota.length ? medicos_nota : null, nomes_medicos: medSel.map(m => m.nome).join(', ') || null
     }
+    if (valorEsperado) payload.valor_esperado_recebimento = valorEsperado.valor
     setLoading(true)
     try {
       if (editando) {
@@ -1040,10 +1084,26 @@ export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], on
     } catch (e) { /* auditoria não deve travar a ação principal se falhar */ }
   }
 
+  // Troca a etapa do ciclo, gravando quem mexeu e quando.
+  const alterarEtapa = async (id, etapa) => {
+    const notaAntes = notas.find(n => n.id === id)
+    let email = null
+    try { const { data } = await getUser(); email = data?.user?.email || null } catch (e) {}
+    const { error } = await supabase.from('notas_fiscais').update({
+      etapa, etapa_responsavel: email, etapa_atualizada_em: new Date().toISOString(),
+    }).eq('id', id)
+    if (error) { toast('Erro ao mudar a etapa: ' + error.message, 'error'); return }
+    registrarAuditoria('etapa_alterada', id, { nf: notaAntes?.nf, etapa_anterior: etapaEfetiva(notaAntes), etapa_nova: etapa })
+    onRefresh()
+  }
+
   const alterarStatus = async (id, status) => {
     const notaAntes = notas.find(n => n.id === id)
     await supabase.from('notas_fiscais').update({ status }).eq('id', id)
     registrarAuditoria('status_alterado', id, { nf: notaAntes?.nf, status_anterior: notaAntes?.status, status_novo: status })
+    try {
+      await supabase.from('notas_fiscais').update({ etapa: etapaDoStatus(status), etapa_atualizada_em: new Date().toISOString() }).eq('id', id)
+    } catch (e) { /* coluna de etapa ainda não criada: ignora */ }
     if (status === 'Paga ao médico') {
       const nota = notas.find(n => n.id === id)
       if (nota) await sincronizarExtratoDaNota({ ...nota, status })
@@ -1297,6 +1357,10 @@ export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], on
               <option value="">Todos médicos</option>
               {medicosDasNotas.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
+            <select className="filter-select" value={fltEtapa} onChange={e => setFltEtapa(e.target.value)} title="Etapa do ciclo">
+              <option value="">Todas etapas</option>
+              {ORDEM_ETAPAS.map(k => <option key={k} value={k}>{ETAPAS[k]}</option>)}
+            </select>
           </div>
           <div className="table-wrap">
             <table>
@@ -1355,6 +1419,13 @@ export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], on
                     <td className="mono" style={{ fontWeight:600 }}>
                       {brl(n.bruto)}
                       <div style={{ fontSize:10, color:'var(--n5)', fontWeight:400 }}>líq. {brl(n.recebido)}</div>
+                      {n.valor_esperado_recebimento != null && (
+                        <div style={{ fontSize:10, fontWeight:600, color: n.valor_recebido_real != null && Math.round(Math.abs(n.valor_recebido_real - n.valor_esperado_recebimento) * 100) > 1 ? '#DC2626' : 'var(--blue)' }}
+                          title={n.valor_recebido_real != null ? `Recebido de fato: ${brl(n.valor_recebido_real)}` : 'Bruto menos as retenções cadastradas no tomador'}>
+                          a receber {brl(n.valor_esperado_recebimento)}
+                          {n.valor_recebido_real != null && Math.round(Math.abs(n.valor_recebido_real - n.valor_esperado_recebimento) * 100) > 1 && ' ⚠️'}
+                        </div>
+                      )}
                     </td>
                     <td className="mono" style={{ color:'var(--n4)' }}>
                       {brl(n.total_repasse||0)}
@@ -1370,6 +1441,11 @@ export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], on
                         <option value="Emitida">Emitida</option>
                         <option value="Recebida">Recebida</option>
                         <option value="Paga ao médico">Paga ao médico</option>
+                      </select>
+                      <select style={{ height:22, fontSize:10, width:130, marginTop:3, border:'1px solid var(--border)', borderRadius:6, padding:'0 4px', fontFamily:'var(--sans)', color:'var(--n4)' }}
+                        value={etapaEfetiva(n)} onChange={e => alterarEtapa(n.id, e.target.value)}
+                        title={n.etapa_atualizada_em ? `Etapa atualizada por ${n.etapa_responsavel || '—'} em ${new Date(n.etapa_atualizada_em).toLocaleString('pt-BR')}` : 'Etapa do ciclo (deduzida do status)'}>
+                        {ORDEM_ETAPAS.map(k => <option key={k} value={k}>{ETAPAS[k]}</option>)}
                       </select>
                     </td>
                     <td style={{ display:'flex', gap:4, paddingTop:6 }}>
@@ -2010,12 +2086,30 @@ export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], on
                   </div>
                 )}
               </div>
-              {[['comp','Competência (emissão)','month',''],['mes_recebimento','Mês de recebimento','month',''],['data_vencimento','Prazo de pagamento (vencimento)','date',''],['data_pagamento','Data de pagamento (exata)','date',''],['emissao','Data emissão','date',''],['obs','Observações','text','']].map(([k,l,t,p]) => (
+              {[['comp','Competência (emissão)','month',''],['mes_recebimento','Mês de recebimento','month',''],['data_recebimento','Data em que o tomador pagou','date',''],['data_vencimento','Prazo de pagamento (vencimento)','date',''],['data_pagamento','Data de pagamento ao médico (exata)','date',''],['emissao','Data emissão','date',''],['obs','Observações','text','']].map(([k,l,t,p]) => (
                 <div key={k} className="field">
                   <label>{l}</label>
                   <input type={t} value={form[k]} onChange={e => setForm(f=>({...f,[k]:e.target.value}))} placeholder={p}/>
                 </div>
               ))}
+              {tomadorRegra && (tomadorRegra.prazo_dias != null || tomadorRegra.exige_aprovacao || tomadorRegra.retem_iss === 'depende' || tomadorRegra.municipio_iss) && (
+                <div className="field form-full" style={{ background:'var(--n9)', border:'1px solid var(--border)', borderRadius:8, padding:'8px 12px', fontSize:11.5, color:'var(--n3)', lineHeight:1.6 }}>
+                  <div style={{ fontWeight:700, color:'var(--g3)', fontSize:10, textTransform:'uppercase', letterSpacing:.4, marginBottom:2 }}>Regras do tomador</div>
+                  {tomadorRegra.prazo_dias != null && (
+                    <div>
+                      ⏱️ Prazo de {tomadorRegra.prazo_dias} dia(s), contado do(a) {({ emissao:'emissão', aceite:'aceite', recebimento:'recebimento' })[tomadorRegra.base_prazo || 'emissao']}.{' '}
+                      {vencSugerido
+                        ? <strong>Vencimento calculado: {vencSugerido.split('-').reverse().join('/')}</strong>
+                        : (tomadorRegra.base_prazo || 'emissao') !== 'emissao'
+                          ? 'Informe o vencimento quando a data-base for conhecida.'
+                          : 'Preencha a data de emissão para calcular o vencimento.'}
+                    </div>
+                  )}
+                  {tomadorRegra.exige_aprovacao && <div>🕒 Exige medição, relatório ou aprovação antes de pagar.</div>}
+                  {tomadorRegra.retem_iss === 'depende' && <div style={{ color:'#D97706' }}>⚠️ ISS: depende do caso. Confira nesta nota se foi retido.</div>}
+                  {tomadorRegra.municipio_iss && <div>🏛️ ISS devido em {tomadorRegra.municipio_iss}.</div>}
+                </div>
+              )}
               <div className="field">
                 <label>Valor recebido real (R$) — se diferente do esperado</label>
                 <input type="number" min="0" step="0.01" value={form.valor_recebido_real} onChange={e => setForm(f=>({...f,valor_recebido_real:e.target.value}))} placeholder="deixe vazio se recebeu o valor esperado"/>
@@ -2121,6 +2215,13 @@ export function Notas({ notas, medicos, tomadores = [], extratoBancario = [], on
             {v.margem < 0 && (
               <div style={{ background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: 'var(--radius-lg)', padding: '12px 16px', marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: '#B91C1C', fontWeight: 600 }}>
                 🚨 Essa nota está em <strong>prejuízo de {brl(Math.abs(v.margem))}</strong> — o repasse aos médicos é maior que o valor líquido recebido pela empresa. Confira se os valores estão corretos antes de salvar.
+              </div>
+            )}
+
+            {valorEsperado && (
+              <div style={{ background:'#EFF6FF', border:'1px solid #BFDBFE', borderRadius:'var(--radius-lg)', padding:'10px 14px', marginTop:10, fontSize:12.5, color:'#1D4ED8' }}>
+                💰 Valor esperado de recebimento: <strong>{brl(valorEsperado.valor)}</strong>
+                <span style={{ color:'var(--n4)' }}> (bruto menos as retenções do tomador:{valorEsperado.iss ? ` ISS ${valorEsperado.iss}%` : ''}{valorEsperado.iss && valorEsperado.outras ? ' +' : ''}{valorEsperado.outras ? ` outras ${valorEsperado.outras}%` : ''})</span>
               </div>
             )}
 
