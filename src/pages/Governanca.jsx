@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { ETAPAS, ORDEM_ETAPAS, etapaEfetiva } from '../lib/etapas'
 
 const brl = v => Number(v || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const fmtMes = m => {
@@ -78,6 +79,18 @@ export function Governanca({ notas = [], medicos = [], extratoBancario = [], doc
   }, [notas, pagoRealPorNf])
 
   // ── Riscos operacionais ──
+  // Funil do ciclo (Order-to-Cash): onde cada nota está agora.
+  const funil = useMemo(() => {
+    const m = {}
+    ORDEM_ETAPAS.forEach(k => { m[k] = { qtd: 0, bruto: 0 } })
+    notas.forEach(n => {
+      const k = etapaEfetiva(n)
+      m[k].qtd++
+      m[k].bruto += n.bruto || 0
+    })
+    return m
+  }, [notas])
+
   const riscos = useMemo(() => {
     const emPrejuizo = notas.filter(n => (n.margem || 0) < 0)
     const hojeISO = new Date().toISOString().split('T')[0]
@@ -112,11 +125,13 @@ export function Governanca({ notas = [], medicos = [], extratoBancario = [], doc
     notas.forEach(n => {
       if (!n.data_vencimento || !n.tomador) return
       const venc = new Date(n.data_vencimento.split('T')[0] + 'T00:00:00')
+      // Base: data em que o tomador de fato pagou. Sem ela, só conta a nota que ainda
+      // está em aberto (Emitida) e vencida; nota já recebida sem a data fica de fora.
       let atrasoDias = null
-      if (n.status === 'Paga ao médico' && n.data_pagamento) {
-        const pag = new Date(n.data_pagamento.split('T')[0] + 'T00:00:00')
+      if (n.data_recebimento) {
+        const pag = new Date(n.data_recebimento.split('T')[0] + 'T00:00:00')
         atrasoDias = Math.round((pag - venc) / 86400000)
-      } else if (n.status !== 'Paga ao médico') {
+      } else if (n.status === 'Emitida') {
         atrasoDias = Math.round((hoje - venc) / 86400000)
       }
       if (atrasoDias === null) return
@@ -133,18 +148,21 @@ export function Governanca({ notas = [], medicos = [], extratoBancario = [], doc
       .sort((a, b) => b.atrasoMedioDias - a.atrasoMedioDias)
   }, [notas])
 
+  // Notas já recebidas, com vencimento, mas sem a data em que o tomador pagou: ficam de fora das duas contas.
+  const recebidasSemData = useMemo(
+    () => notas.filter(n => n.data_vencimento && n.status !== 'Emitida' && !n.data_recebimento).length, [notas])
+
   // ── % de notas dentro do prazo (só considera notas com data_vencimento definida) ──
   const percentualNoPrazo = useMemo(() => {
-    const comPrazo = notas.filter(n => n.data_vencimento)
+    // Só entram notas com vencimento E com situação conhecida: recebida com a data em
+    // que o tomador pagou, ou ainda em aberto. Recebida sem data não dá pra avaliar.
+    const comPrazo = notas.filter(n => n.data_vencimento && (n.data_recebimento || n.status === 'Emitida'))
     if (!comPrazo.length) return null
     const hoje = new Date()
     const dentroDoPrazo = comPrazo.filter(n => {
       const venc = new Date(n.data_vencimento.split('T')[0] + 'T00:00:00')
-      if (n.status === 'Paga ao médico' && n.data_pagamento) {
-        const pag = new Date(n.data_pagamento.split('T')[0] + 'T00:00:00')
-        return pag <= venc
-      }
-      return hoje <= venc // ainda não venceu
+      if (n.data_recebimento) return new Date(n.data_recebimento.split('T')[0] + 'T00:00:00') <= venc
+      return hoje <= venc // ainda em aberto e não venceu
     })
     return { pct: (dentroDoPrazo.length / comPrazo.length) * 100, total: comPrazo.length, dentro: dentroDoPrazo.length }
   }, [notas])
@@ -211,6 +229,12 @@ export function Governanca({ notas = [], medicos = [], extratoBancario = [], doc
           )}
         </div>
 
+        {recebidasSemData > 0 && (
+          <div style={{ background: '#EFF6FF', border: '1px solid #BFDBFE', borderRadius: 10, padding: '10px 14px', marginTop: -12, marginBottom: 24, fontSize: 12, color: '#1D4ED8' }}>
+            ℹ️ {recebidasSemData} nota(s) já recebidas estão sem a data em que o tomador pagou e ficaram fora do "% dentro do prazo" e do atraso médio por tomador. Preencha em <strong>Exceções de recebimento → Sem data de recebimento</strong>.
+          </div>
+        )}
+
         {/* CONCILIAÇÃO */}
         <div style={{ fontSize: 13, fontWeight: 700, color: GRAY[1], marginBottom: 10 }}>🔄 Conciliação bancária</div>
         <div style={{ ...cardStyle, padding: '16px 20px', marginBottom: 24, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -261,6 +285,22 @@ export function Governanca({ notas = [], medicos = [], extratoBancario = [], doc
           <RiscoCard icon="📅" titulo="Vencidas sem baixa" valor={riscos.vencidasSemBaixa.qtd} sub={riscos.vencidasSemBaixa.qtd > 0 ? `R$ ${brl(riscos.vencidasSemBaixa.valor)} em aberto` : 'Nenhum prazo vencido'} cor={RED} ok={riscos.vencidasSemBaixa.qtd === 0} />
           <RiscoCard icon="🔒" titulo="Notas travadas (emitidas)" valor={riscos.travadas.qtd} sub={riscos.travadas.qtd > 0 ? `R$ ${brl(riscos.travadas.valor)} aguardando recebimento` : 'Nada travado'} cor={ORANGE} ok={riscos.travadas.qtd === 0} />
           <RiscoCard icon="👨‍⚕️" titulo="Médicos inativos" valor={riscos.medicosInativos} sub="sem faturar nos últimos 2 meses" cor={ORANGE} ok={riscos.medicosInativos === 0} />
+        </div>
+
+        {/* FUNIL DO CICLO */}
+        <div style={{ fontSize: 13, fontWeight: 700, color: GRAY[1], marginBottom: 10 }}>🔁 Onde estão as notas no ciclo (emissão até repasse)</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginBottom: 24 }}>
+          {ORDEM_ETAPAS.map(k => {
+            const f = funil[k]
+            const alerta = (k === 'em_divergencia' || k === 'em_cobranca') && f.qtd > 0
+            return (
+              <div key={k} style={{ ...cardStyle, padding: '12px 14px', borderLeft: `4px solid ${alerta ? ORANGE : f.qtd > 0 ? G.g3 : GRAY[5]}` }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: GRAY[2], marginBottom: 4 }}>{ETAPAS[k]}</div>
+                <div style={{ fontSize: 20, fontWeight: 700, fontFamily: 'monospace', color: f.qtd > 0 ? GRAY[0] : GRAY[3] }}>{f.qtd}</div>
+                <div style={{ fontSize: 10.5, color: GRAY[3], marginTop: 2 }}>{f.qtd > 0 ? `R$ ${brl(f.bruto)} bruto` : 'nenhuma nota'}</div>
+              </div>
+            )
+          })}
         </div>
 
         {/* DISTRIBUIÇÃO MENSAL x EXTRATO */}
