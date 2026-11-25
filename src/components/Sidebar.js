@@ -1,5 +1,6 @@
 import { NavLink, useNavigate } from 'react-router-dom'
-import { supabase } from '../lib/supabase'
+import { supabase, empresaAtual } from '../lib/supabase'
+import { EMPRESAS, trocarEmpresa, formatCNPJ } from '../lib/empresas'
 import { useAuth } from '../contexts/AuthContext'
 import { useToast } from './Toast'
 
@@ -54,16 +55,23 @@ export function Sidebar({ badges = {} }) {
       <div className="sidebar-logo">
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '4px 0' }}>
           <div style={{ fontSize: 20, fontWeight: 800, color: '#fff', letterSpacing: '-0.5px', lineHeight: 1 }}>
-            {process.env.REACT_APP_EMPRESA_NOME || <>Aunord<span style={{ color: 'var(--g7)' }}>MED</span></>}
+            Aunord<span style={{ color: 'var(--g7)' }}>MED</span>
           </div>
           <div style={{ fontSize: 9, color: 'rgba(255,255,255,.3)', letterSpacing: '2px', marginTop: 4, textTransform: 'uppercase' }}>
             Financeiro
           </div>
-          {process.env.REACT_APP_EMPRESA_CNPJ && (
-            <div style={{ fontSize: 9.5, color: 'rgba(255,255,255,.45)', marginTop: 6, fontFamily: 'monospace', letterSpacing: '.3px' }}>
-              CNPJ {process.env.REACT_APP_EMPRESA_CNPJ}
-            </div>
-          )}
+          <select
+            value={empresaAtual.id}
+            onChange={e => { if (e.target.value !== empresaAtual.id) trocarEmpresa(e.target.value) }}
+            title="Trocar de empresa"
+            style={{ marginTop: 10, width: '100%', background: 'rgba(255,255,255,.08)', color: '#fff', border: '1px solid rgba(255,255,255,.18)', borderRadius: 6, padding: '6px 8px', fontSize: 12, fontWeight: 700, cursor: 'pointer', outline: 'none' }}>
+            {EMPRESAS.map(e => (
+              <option key={e.id} value={e.id} style={{ color: '#111' }}>{e.nome}</option>
+            ))}
+          </select>
+          <div style={{ fontSize: 9.5, color: 'rgba(255,255,255,.45)', marginTop: 6, fontFamily: 'monospace', letterSpacing: '.3px' }}>
+            CNPJ {formatCNPJ(empresaAtual.cnpj)}
+          </div>
         </div>
       </div>
       <nav style={{ padding: '8px 8px', flex: 1, overflowY: 'auto' }}>
