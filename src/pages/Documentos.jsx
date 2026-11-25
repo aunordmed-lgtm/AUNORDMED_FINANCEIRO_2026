@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { supabase } from '../lib/supabase'
+import { supabase, empresaAtual } from '../lib/supabase'
 import { useToast } from '../components/Toast'
 
 const TIPOS = [
@@ -23,7 +23,7 @@ export function Documentos({ documentosEmpresa = [], onRefresh }) {
     setEnviando(tipo)
     try {
       const ext = file.name.split('.').pop()
-      const path = `${tipo}_${Date.now()}.${ext}`
+      const path = `${empresaAtual.schema === 'public' ? '' : empresaAtual.id + '/'}${tipo}_${Date.now()}.${ext}`
       const { error: upErr } = await supabase.storage.from('documentos-empresa').upload(path, file, { upsert: true })
       if (upErr) throw upErr
       const { data: pub } = supabase.storage.from('documentos-empresa').getPublicUrl(path)

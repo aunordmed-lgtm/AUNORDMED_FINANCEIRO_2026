@@ -4,6 +4,7 @@ import { useToast } from '../components/Toast'
 import { Modal } from '../components/Modal'
 import { brl, fmtData, fmtMes, pad } from '../lib/helpers'
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
+import { cfgKey } from '../lib/empresas'
 
 export function Comprovantes({ comprovantes=[], medicos, notas=[], onRefresh }) {
   const { toast } = useToast()
@@ -12,7 +13,7 @@ export function Comprovantes({ comprovantes=[], medicos, notas=[], onRefresh }) 
   const [medicoSel, setMedicoSel] = useState('')
   const [modalWpp, setModalWpp] = useState(false)
   const [wppData, setWppData] = useState({ link:'', msg:'', tel:'' })
-  const cfg = JSON.parse(localStorage.getItem('am_cfg4')||'{}')
+  const cfg = JSON.parse(localStorage.getItem(cfgKey())||'{}')
   const baseUrl = cfg.baseUrl || 'https://aunordmed-lgtm.github.io/aunordmed-financeiro/comprovante.html'
 
   const filtrados = useMemo(() => comprovantes.filter(c =>

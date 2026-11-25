@@ -1,18 +1,19 @@
 
 import { useState, useEffect } from 'react'
 import { useToast } from '../components/Toast'
+import { cfgKey } from '../lib/empresas'
 
 export function Configuracoes({ onRefresh }) {
   const { toast } = useToast()
   const [cfg, setCfg] = useState({ imposto:'6.15', retencao:'13', nome:'AunordMED', cnpj:'', wppUrl:'', wppKey:'', wppInst:'aunordmed', baseUrl:'https://aunordmed-lgtm.github.io/aunordmed-financeiro/comprovante.html' })
 
   useEffect(() => {
-    const s = localStorage.getItem('am_cfg4')
+    const s = localStorage.getItem(cfgKey())
     if(s) setCfg(c=>({...c,...JSON.parse(s)}))
   }, [])
 
   const salvar = () => {
-    localStorage.setItem('am_cfg4', JSON.stringify(cfg))
+    localStorage.setItem(cfgKey(), JSON.stringify(cfg))
     toast('Configurações salvas!')
   }
 

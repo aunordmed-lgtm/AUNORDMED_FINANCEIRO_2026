@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { supabase } from '../lib/supabase'
+import { supabase, empresaAtual } from '../lib/supabase'
 import { useToast } from '../components/Toast'
 import { brl, fmtMes, fmtData } from '../lib/helpers'
 import * as XLSX from 'xlsx'
@@ -98,11 +98,15 @@ export function Repasses({ notas, medicos, onRefresh }) {
 
   // Gerar CNAB 240 (.REM) padrão Banco Inter
   const gerarCNAB240 = (lista, nomeArq) => {
-    const CNPJ = '60577717000122'
-    const NOME = 'AUNORDMED LTDA          '
-    const AGE  = '00001'
-    const CONT = '000044349336'
-    const DVC  = '7'
+    if (!empresaAtual.banco) {
+      toast(`Conta bancária da ${empresaAtual.nome} não cadastrada para CNAB (src/lib/empresas.js).`, 'error')
+      return
+    }
+    const CNPJ = empresaAtual.cnpj
+    const NOME = empresaAtual.banco.nomeCnab
+    const AGE  = empresaAtual.banco.agencia
+    const CONT = empresaAtual.banco.conta
+    const DVC  = empresaAtual.banco.dv
     const now  = new Date()
     const Z = (v, n) => String(v).padStart(n, '0')
     const L = (v, n) => String(v||'').toUpperCase().padEnd(n,' ').substring(0,n)
